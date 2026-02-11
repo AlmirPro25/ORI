@@ -1,67 +1,46 @@
-# StreamForge - Industrial Media Engine
+# 🌌 StreamForge: Orion Edition
 
-> Plataforma de streaming VOD escalável com arquitetura de microservices, transcodificação assíncrona (FFmpeg) e entrega HLS.
+> Industrial Media Engine com protocolo de distribuição federado e inteligência soberana.
 
-## 🏗 Arquitetura
+## 🏗️ O Ecossistema
 
-1.  **Ingestão via API:** Node.js/Express recebe uploads.
-2.  **Fila de Processamento:** Redis/BullMQ gerencia filas.
-3.  **Worker Assíncrono:** Node.js + FFmpeg transcodifica para HLS.
-4.  **Storage:** MinIO (local) ou S3 (prod) armazena pedaços de vídeo.
+Esta plataforma não é apenas um VOD. É um ecossistema de três camadas integradas:
 
-## 🌌 Ecossistema NEXUS (IA Admin)
+1.  **🚀 StreamForge Core**: Engine de streaming HLS, gerenciamento de bibliotecas e transcodificação.
+2.  **🛰️ Orion Protocol**: Camada de federação P2P (Gossip Protocol) para descoberta e anúncio de conteúdo sem servidores centrais.
+3.  **🤖 Arconte Intelligence**: Agente autônomo de busca profunda (Nexus Fleet) que forja metadados a partir de fontes externas.
 
-Agora o sistema inclui o **Nexus Deep Search**, uma infraestrutura de busca profunda P2P.
+## ⚡ Inicialização Rápida (v1.0 Stable)
 
-### 🤖 Arconte - Agente de Sinergia
-O Arconte é a inteligência que une os dois mundos:
-- Se um usuário busca algo não catalogado, o **Arconte** é despachado.
-- Ele varre o **Nexus** (Crawler Puppeteer) em busca de ativos.
-- Forja automaticamente os metadados e injeta no catálogo do **StreamForge**.
+O sistema agora é **Portable**. Não é necessário configurar Docker para o desenvolvimento local.
 
-### 🛠 Inicialização do Nexo
-1.  **Arconte Backend (Nexus):**
-    ```bash
-    cd nexus
-    npm install
-    npm start # Roda na porta 3005
-    ```
-2.  **StreamForge (Portable):
+### 1-Click Launch (Windows)
+```powershell
+./launch_orion.ps1
+```
+
+### Inicialização Manual
+1.  **Backend & Orion Node**:
     ```bash
     cd backend
     npm install
-    npm run dev # Roda na porta 3000
+    npm run dev # Porta 3000 (API) e 4000 (Orion)
     ```
-3.  **Frontend:**
+2.  **Frontend & Dashboard**:
     ```bash
     cd frontend
     npm install
-    npm run dev
+    npm run dev # Porta 5173
     ```
 
-### 🛰 Endpoints de Sinergia
-- `POST /api/v1/ai/deep-search`: Despacha a IA para busca externa.
-- `POST /api/v1/videos/auto-ingest`: Ingestão silenciosa via Nexus.
+## 🌌 Orion Core Dashboard
+Acesse `/orion` na interface para gerenciar seu **Node ID**, visualizar peers federados e publicar conteúdos na rede global.
 
-## 🚀 Inicialização Rápida
+## 🛠️ Stack Técnica
+- **Backend**: Node.js, Express, Prisma, SQLite.
+- **P2P/Federation**: WebTorrent (DHT), Gossip Protocol (Custom Orion), Ed25519 Signatures.
+- **Frontend**: React, Vite, Framer Motion, TailwindCSS (for primitives).
+- **IA**: Puppeteer (Deep Search), Arconte Engine.
 
-1.  Configure as variáveis:
-    ```bash
-    cp .env.example .env
-    ```
-
-2.  Inicie os containers:
-    ```bash
-    docker compose up --build -d
-    ```
-
-3.  Execute migrações (após API subir):
-    ```bash
-    docker compose exec api npx prisma migrate deploy
-    ```
-
-4.  Crie o Bucket `streamforge-media` no MinIO (http://localhost:9001) e coloque como **Public**.
-
-5.  Acesse:
-    *   Frontend: http://localhost:5173
-    *   API: http://localhost:3000
+---
+*Status: v1.0 Stable Release. Desenvolvido para soberania digital.*
