@@ -1,0 +1,86 @@
+openapi: 3.0.0
+info:
+  title: Nexus Deep Search API
+  description: API de extração de dados P2P e controle de automação.
+  version: 1.0.0
+servers:
+  - url: http://localhost:3000
+    description: Nexus Local Node
+paths:
+  /api/health:
+    get:
+      summary: Verifica status do sistema e contagem de threads do navegador.
+      responses:
+        '200':
+          description: Sistema operacional.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "ONLINE"
+                  uptime:
+                    type: number
+                  memory_usage:
+                    type: string
+
+  /api/search:
+    post:
+      summary: Executa uma busca profunda (Deep Crawl).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - query
+              properties:
+                query:
+                  type: string
+                  description: O termo de busca.
+                  example: "Linux ISO"
+                category:
+                  type: string
+                  enum: ["all", "movies", "games", "applications"]
+                  default: "all"
+      responses:
+        '200':
+          description: Resultados encontrados e extraídos.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  source:
+                    type: string
+                    enum: ["cache", "live_network"]
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TorrentItem'
+        '500':
+          description: Erro na automação ou timeout.
+
+components:
+  schemas:
+    TorrentItem:
+      type: object
+      properties:
+        title:
+          type: string
+        magnet:
+          type: string
+          description: Link magnet bruto (sanitizado).
+        size:
+          type: string
+        seeds:
+          type: integer
+        peers:
+          type: integer
+        uploader:
+          type: string
+        source:
+          type: string

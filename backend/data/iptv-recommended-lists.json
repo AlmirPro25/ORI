@@ -1,0 +1,204 @@
+{
+  "recommendedLists": [
+    {
+      "id": "iptv-org-brasil",
+      "name": "🇧🇷 IPTV-ORG Brasil Oficial",
+      "description": "Lista oficial com canais brasileiros abertos e alguns fechados. Atualizada pela comunidade.",
+      "url": "https://iptv-org.github.io/iptv/countries/br.m3u",
+      "category": "Brasil",
+      "estimatedChannels": 200,
+      "quality": "HD/SD",
+      "reliability": "Alta",
+      "tags": ["brasil", "oficial", "abertos", "alguns-fechados"],
+      "icon": "🇧🇷"
+    },
+    {
+      "id": "free-tv-brasil",
+      "name": "📺 Free-TV Brasil",
+      "description": "Canais brasileiros: Globo, SBT, Record, Band + alguns canais fechados disponíveis",
+      "url": "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlists/playlist_brazil.m3u8",
+      "category": "Brasil",
+      "estimatedChannels": 150,
+      "quality": "HD/SD",
+      "reliability": "Média",
+      "tags": ["brasil", "abertos", "globo", "sbt", "record"],
+      "icon": "📺"
+    },
+    {
+      "id": "guiworld-geral",
+      "name": "🔥 GuiWorldTV - Mix Completo",
+      "description": "Mix brasileiro: canais abertos + fechados + esportes. Lista variada e atualizada.",
+      "url": "https://raw.githubusercontent.com/guiworldtv/MEU-IPTV-FULL/master/LISTA-GERAL.m3u",
+      "category": "Brasil",
+      "estimatedChannels": 180,
+      "quality": "SD/HD",
+      "reliability": "Média",
+      "tags": ["brasil", "mix", "variados", "esportes"],
+      "icon": "🔥"
+    },
+    {
+      "id": "iptv-org-global",
+      "name": "IPTV-ORG Global",
+      "description": "Lista global com milhares de canais de todo o mundo. Maior acervo disponível.",
+      "url": "https://iptv-org.github.io/iptv/index.m3u",
+      "category": "Global",
+      "estimatedChannels": 11000,
+      "quality": "Variada",
+      "reliability": "Alta",
+      "tags": ["global", "completo", "todos-paises"],
+      "icon": "🌍"
+    },
+    {
+      "id": "free-tv-sports",
+      "name": "Free-TV Sports",
+      "description": "Canais de esportes de todo o mundo. SporTV, ESPN, Fox Sports e mais.",
+      "url": "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlists/playlist_sports.m3u8",
+      "category": "Esportes",
+      "estimatedChannels": 300,
+      "quality": "HD/SD",
+      "reliability": "Média",
+      "tags": ["esportes", "futebol", "sportv", "espn"],
+      "icon": "⚽"
+    },
+    {
+      "id": "iptv-org-sports",
+      "name": "IPTV-ORG Sports",
+      "description": "Canais de esportes internacionais. Futebol, basquete, UFC e mais.",
+      "url": "https://iptv-org.github.io/iptv/categories/sports.m3u",
+      "category": "Esportes",
+      "estimatedChannels": 400,
+      "quality": "HD/SD",
+      "reliability": "Alta",
+      "tags": ["esportes", "internacional", "futebol", "ufc"],
+      "icon": "🏆"
+    },
+    {
+      "id": "iptv-org-movies",
+      "name": "IPTV-ORG Movies",
+      "description": "Canais de filmes 24/7. Telecine, HBO, Warner e canais de cinema.",
+      "url": "https://iptv-org.github.io/iptv/categories/movies.m3u",
+      "category": "Filmes",
+      "estimatedChannels": 500,
+      "quality": "HD/SD",
+      "reliability": "Alta",
+      "tags": ["filmes", "cinema", "hbo", "telecine"],
+      "icon": "🎬"
+    },
+    {
+      "id": "iptv-org-news",
+      "name": "IPTV-ORG News",
+      "description": "Canais de notícias do mundo todo. CNN, BBC, GloboNews e mais.",
+      "url": "https://iptv-org.github.io/iptv/categories/news.m3u",
+      "category": "Notícias",
+      "estimatedChannels": 800,
+      "quality": "HD/SD",
+      "reliability": "Alta",
+      "tags": ["noticias", "jornalismo", "cnn", "bbc"],
+      "icon": "📰"
+    },
+    {
+      "id": "iptv-org-kids",
+      "name": "IPTV-ORG Kids",
+      "description": "Canais infantis. Cartoon Network, Disney, Nickelodeon e mais.",
+      "url": "https://iptv-org.github.io/iptv/categories/kids.m3u",
+      "category": "Infantil",
+      "estimatedChannels": 250,
+      "quality": "HD/SD",
+      "reliability": "Alta",
+      "tags": ["infantil", "criancas", "cartoon", "disney"],
+      "icon": "👶"
+    },
+    {
+      "id": "iptv-org-music",
+      "name": "IPTV-ORG Music",
+      "description": "Canais de música. MTV, VH1, clipes 24/7 e rádios com vídeo.",
+      "url": "https://iptv-org.github.io/iptv/categories/music.m3u",
+      "category": "Música",
+      "estimatedChannels": 600,
+      "quality": "HD/SD",
+      "reliability": "Alta",
+      "tags": ["musica", "clipes", "mtv", "vh1"],
+      "icon": "🎵"
+    },
+    {
+      "id": "iptv-org-documentary",
+      "name": "IPTV-ORG Documentary",
+      "description": "Canais de documentários. Discovery, National Geographic, History.",
+      "url": "https://iptv-org.github.io/iptv/categories/documentary.m3u",
+      "category": "Documentários",
+      "estimatedChannels": 200,
+      "quality": "HD/SD",
+      "reliability": "Alta",
+      "tags": ["documentarios", "discovery", "natgeo", "history"],
+      "icon": "🔬"
+    },
+    {
+      "id": "iptv-org-series",
+      "name": "IPTV-ORG Series",
+      "description": "Canais de séries 24/7. FOX, Warner, Universal e mais.",
+      "url": "https://iptv-org.github.io/iptv/categories/series.m3u",
+      "category": "Séries",
+      "estimatedChannels": 300,
+      "quality": "HD/SD",
+      "reliability": "Alta",
+      "tags": ["series", "fox", "warner", "universal"],
+      "icon": "📺"
+    }
+  ],
+  "categories": [
+    {
+      "id": "brasil",
+      "name": "Brasil",
+      "icon": "🇧🇷",
+      "description": "Canais brasileiros"
+    },
+    {
+      "id": "global",
+      "name": "Global",
+      "icon": "🌍",
+      "description": "Canais do mundo todo"
+    },
+    {
+      "id": "esportes",
+      "name": "Esportes",
+      "icon": "⚽",
+      "description": "Canais de esportes"
+    },
+    {
+      "id": "filmes",
+      "name": "Filmes",
+      "icon": "🎬",
+      "description": "Canais de cinema"
+    },
+    {
+      "id": "noticias",
+      "name": "Notícias",
+      "icon": "📰",
+      "description": "Canais de jornalismo"
+    },
+    {
+      "id": "infantil",
+      "name": "Infantil",
+      "icon": "👶",
+      "description": "Canais para crianças"
+    },
+    {
+      "id": "musica",
+      "name": "Música",
+      "icon": "🎵",
+      "description": "Canais de música"
+    },
+    {
+      "id": "documentarios",
+      "name": "Documentários",
+      "icon": "🔬",
+      "description": "Canais educativos"
+    },
+    {
+      "id": "series",
+      "name": "Séries",
+      "icon": "📺",
+      "description": "Canais de séries"
+    }
+  ]
+}

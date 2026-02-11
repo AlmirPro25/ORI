@@ -1,0 +1,41 @@
+# ---- Build Stage ----
+FROM node:18-alpine AS builder
+
+WORKDIR /app
+
+# Copia e instala dependencias primeiro (cache mais rapido)
+COPY backend/package*.json ./backend/
+WORKDIR /app/backend
+RUN npm ci
+
+# Agora copia o codigo e builda
+COPY backend/ ./
+RUN npx tsc
+
+# ---- Production Stage ----
+FROM node:18-alpine
+
+# FFmpeg e Ferramentas essenciais para Streaming
+RUN apk add --no-cache ffmpeg python3 make g++ curl
+
+WORKDIR /app
+ENV NODE_ENV=production
+
+# Copia dependencias de prod
+COPY backend/package*.json ./
+RUN npm ci --omit=dev
+
+# Copia o build transpilado
+COPY --from=builder /app/backend/dist ./dist
+# Copia prisma schema e gera o client
+COPY backend/prisma ./prisma
+# Gera o client em producao (importante!)
+RUN npx prisma generate
+
+# Copia arquivos estaticos/uploads se necessario
+# COPY backend/uploads ./uploads  <-- Geralmente monta volume aqui
+
+# Expose API Port
+EXPOSE 3000
+
+CMD ["node", "dist/server-portable.js"]

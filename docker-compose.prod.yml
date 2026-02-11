@@ -1,0 +1,94 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - /opt/streamforge/data/postgres:/var/lib/postgresql/data
+    networks:
+      - internal_net
+
+  redis:
+    image: redis:alpine
+    restart: always
+    volumes:
+      - /opt/streamforge/data/redis:/data
+    networks:
+      - internal_net
+
+  minio:
+    image: minio/minio
+    restart: always
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - /opt/streamforge/data/minio:/data
+    networks:
+      - internal_net
+      - public_net
+
+  api:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/streamforge-backend:${IMAGE_TAG:-latest}
+    restart: always
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}?schema=public
+      JWT_SECRET: ${JWT_SECRET}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+    volumes:
+      - /opt/streamforge/backend/uploads:/app/uploads
+    depends_on:
+      - postgres
+      - redis
+      - minio
+    networks:
+      - internal_net
+      - public_net
+    command: npm start
+
+  worker:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/streamforge-backend:${IMAGE_TAG:-latest}
+    restart: always
+    environment:
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}?schema=public
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME}
+    volumes:
+      - /opt/streamforge/backend/uploads:/app/uploads
+    depends_on:
+      - postgres
+      - redis
+      - minio
+    networks:
+      - internal_net
+    command: npm run start:worker
+
+  frontend:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER}/streamforge-frontend:${IMAGE_TAG:-latest}
+    restart: always
+    networks:
+      - public_net
+
+networks:
+  internal_net:
+    driver: bridge
+  public_net:
+    driver: bridge

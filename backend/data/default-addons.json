@@ -1,0 +1,23 @@
+[
+  {
+    "name": "Torrentio Brazuca",
+    "manifestUrl": "https://torrentio.strem.fun/brazuca/manifest.json",
+    "description": "Versão pré-configurada do Torrentio para conteúdo brasileiro. Prioriza torrents dublados em PT-BR.",
+    "enabled": true,
+    "priority": 1
+  },
+  {
+    "name": "Torrentio",
+    "manifestUrl": "https://torrentio.strem.fun/manifest.json",
+    "description": "Addon principal do Torrentio com suporte a múltiplos trackers e provedores.",
+    "enabled": true,
+    "priority": 2
+  },
+  {
+    "name": "ThePirateBay+",
+    "manifestUrl": "https://thepiratebay-plus.strem.fun/manifest.json",
+    "description": "Streams do The Pirate Bay com busca avançada.",
+    "enabled": true,
+    "priority": 3
+  }
+]

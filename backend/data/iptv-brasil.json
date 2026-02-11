@@ -1,0 +1,337 @@
+{
+  "name": "IPTV Brasil - Canais Fechados",
+  "description": "Lista de canais de TV fechada brasileiros",
+  "source": "Listas públicas GitHub",
+  "channels": [
+    {
+      "name": "Globo SP",
+      "logo": "http://i.imgur.com/ozxkJhG.png",
+      "group": "CANAIS ABERTOS",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1312.m3u8"
+    },
+    {
+      "name": "Globo RJ HD",
+      "logo": "http://i.imgur.com/ozxkJhG.png",
+      "group": "CANAIS ABERTOS",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1394.m3u8"
+    },
+    {
+      "name": "SBT HD",
+      "logo": "http://i.imgur.com/Jotugf0.png",
+      "group": "CANAIS ABERTOS",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1371.m3u8"
+    },
+    {
+      "name": "Record HD",
+      "logo": "http://i.imgur.com/1Zb1lr8.png",
+      "group": "CANAIS ABERTOS",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1373.m3u8"
+    },
+    {
+      "name": "Band HD",
+      "logo": "http://i.imgur.com/6xouXln.png",
+      "group": "CANAIS ABERTOS",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1417.m3u8"
+    },
+    {
+      "name": "Rede TV HD",
+      "logo": "http://i.imgur.com/mFIHvKN.png",
+      "group": "CANAIS ABERTOS",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1372.m3u8"
+    },
+    {
+      "name": "Globo News HD",
+      "logo": "http://i.imgur.com/GIbRutN.png",
+      "group": "CANAIS NOTICIAS",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/2235.m3u8"
+    },
+    {
+      "name": "Band News",
+      "logo": "http://i.imgur.com/ibNTVbR.png",
+      "group": "CANAIS NOTICIAS",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1349.m3u8"
+    },
+    {
+      "name": "Record News",
+      "logo": "http://i.imgur.com/I99RZ9n.png",
+      "group": "CANAIS NOTICIAS",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1265.m3u8"
+    },
+    {
+      "name": "SporTV HD",
+      "logo": "http://i.imgur.com/gDHSHwM.png",
+      "group": "CANAIS ESPORTE",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1367.m3u8"
+    },
+    {
+      "name": "SporTV 2 HD",
+      "logo": "http://i.imgur.com/v4TmPpc.png",
+      "group": "CANAIS ESPORTE",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1369.m3u8"
+    },
+    {
+      "name": "SporTV 3 HD",
+      "logo": "http://s29.postimg.org/6gznfk6tv/Spor_TV3.png",
+      "group": "CANAIS ESPORTE",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1368.m3u8"
+    },
+    {
+      "name": "ESPN HD",
+      "logo": "https://s31.postimg.org/jnhiwkp97/ESPN.png",
+      "group": "CANAIS ESPORTE",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1405.m3u8"
+    },
+    {
+      "name": "ESPN Brasil HD",
+      "logo": "http://i.imgur.com/rTXcueh.png",
+      "group": "CANAIS ESPORTE",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1404.m3u8"
+    },
+    {
+      "name": "Fox Sports HD",
+      "logo": "http://i.imgur.com/bYUGfOo.png",
+      "group": "CANAIS ESPORTE",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1397.m3u8"
+    },
+    {
+      "name": "Fox Sports 2 HD",
+      "logo": "http://i.imgur.com/imNhdzS.png",
+      "group": "CANAIS ESPORTE",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1396.m3u8"
+    },
+    {
+      "name": "Combate HD",
+      "logo": "http://i.imgur.com/5qo1Dyc.png",
+      "group": "CANAIS ESPORTE",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1413.m3u8"
+    },
+    {
+      "name": "Band Sports HD",
+      "logo": "http://i.imgur.com/zR3osZs.png",
+      "group": "CANAIS ESPORTE",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1416.m3u8"
+    },
+    {
+      "name": "Premiere Clubes HD",
+      "logo": "http://i.imgur.com/8d0cM31.png",
+      "group": "CANAIS ESPORTE",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1378.m3u8"
+    },
+    {
+      "name": "Telecine Premium HD",
+      "logo": "http://i.imgur.com/aMWCWA0.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1362.m3u8"
+    },
+    {
+      "name": "Telecine Action HD",
+      "logo": "http://i.imgur.com/Lx3R36Y.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1365.m3u8"
+    },
+    {
+      "name": "Telecine Fun HD",
+      "logo": "http://i.imgur.com/ltpUjbD.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1364.m3u8"
+    },
+    {
+      "name": "Telecine Pipoca HD",
+      "logo": "http://i.imgur.com/lfOS7gF.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1363.m3u8"
+    },
+    {
+      "name": "Telecine Touch HD",
+      "logo": "http://i.imgur.com/849pB2j.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1361.m3u8"
+    },
+    {
+      "name": "HBO HD",
+      "logo": "http://i.imgur.com/KOIo5EH.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1389.m3u8"
+    },
+    {
+      "name": "HBO 2 HD",
+      "logo": "http://i.imgur.com/okiePBA.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1391.m3u8"
+    },
+    {
+      "name": "HBO Family HD",
+      "logo": "http://i.imgur.com/x2Enlmt.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1390.m3u8"
+    },
+    {
+      "name": "HBO Plus HD",
+      "logo": "http://i.imgur.com/rjzeynR.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1388.m3u8"
+    },
+    {
+      "name": "HBO Signature HD",
+      "logo": "http://i.imgur.com/i89AzSA.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1387.m3u8"
+    },
+    {
+      "name": "Cinemax HD",
+      "logo": "http://i.imgur.com/nlGx2t1.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/2256.m3u8"
+    },
+    {
+      "name": "Megapix HD",
+      "logo": "http://i.imgur.com/HvbMaEP.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1384.m3u8"
+    },
+    {
+      "name": "FOX HD",
+      "logo": "http://i.imgur.com/Od0wkz3.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1399.m3u8"
+    },
+    {
+      "name": "Warner Channel HD",
+      "logo": "http://i.imgur.com/xvZ66AU.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1355.m3u8"
+    },
+    {
+      "name": "Universal Channel HD",
+      "logo": "http://i.imgur.com/Aag8ICV.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1358.m3u8"
+    },
+    {
+      "name": "AXN HD",
+      "logo": "http://i.imgur.com/cAGSnn7.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1418.m3u8"
+    },
+    {
+      "name": "TNT HD",
+      "logo": "http://i.imgur.com/VhQUWnY.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1360.m3u8"
+    },
+    {
+      "name": "TNT Series HD",
+      "logo": "http://i.imgur.com/HE2yMfG.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1359.m3u8"
+    },
+    {
+      "name": "Space HD",
+      "logo": "http://i.imgur.com/wP2GD1G.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1370.m3u8"
+    },
+    {
+      "name": "FX HD",
+      "logo": "http://i.imgur.com/GaQZSu6.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1395.m3u8"
+    },
+    {
+      "name": "Paramount HD",
+      "logo": "http://i.imgur.com/yScrn6s.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1379.m3u8"
+    },
+    {
+      "name": "Canal Sony HD",
+      "logo": "http://i.imgur.com/eHN8OeK.png",
+      "group": "FILMES/SERIES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1414.m3u8"
+    },
+    {
+      "name": "Cartoon Network HD",
+      "logo": "http://i.imgur.com/S5PsDDR.png",
+      "group": "CANAIS INFANTIL",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/2257.m3u8"
+    },
+    {
+      "name": "Discovery Kids HD",
+      "logo": "http://i.imgur.com/32njYPj.png",
+      "group": "CANAIS INFANTIL",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/2348.m3u8"
+    },
+    {
+      "name": "Gloob HD",
+      "logo": "http://i.imgur.com/mFDFUjt.png",
+      "group": "CANAIS INFANTIL",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/2661.m3u8"
+    },
+    {
+      "name": "Disney Channel",
+      "logo": "http://i.imgur.com/4KeieN7.png",
+      "group": "CANAIS INFANTIL",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1328.m3u8"
+    },
+    {
+      "name": "Nickelodeon",
+      "logo": "http://i.imgur.com/ZjLSLiY.png",
+      "group": "CANAIS INFANTIL",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1283.m3u8"
+    },
+    {
+      "name": "Discovery Channel HD",
+      "logo": "http://i.imgur.com/tUTV4Kl.png",
+      "group": "DOCUMENTARIOS",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1412.m3u8"
+    },
+    {
+      "name": "Animal Planet HD",
+      "logo": "http://i.imgur.com/J1oK0xW.png",
+      "group": "DOCUMENTARIOS",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1419.m3u8"
+    },
+    {
+      "name": "National Geographic HD",
+      "logo": "http://i.imgur.com/UgmPkZ0.png",
+      "group": "DOCUMENTARIOS",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1381.m3u8"
+    },
+    {
+      "name": "History Channel HD",
+      "logo": "http://i.imgur.com/0oZXoaE.png",
+      "group": "DOCUMENTARIOS",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1386.m3u8"
+    },
+    {
+      "name": "Multishow HD",
+      "logo": "http://i.imgur.com/yYmGNnQ.png",
+      "group": "VARIEDADES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1383.m3u8"
+    },
+    {
+      "name": "GNT HD",
+      "logo": "http://i.imgur.com/a4pnqAH.png",
+      "group": "VARIEDADES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1393.m3u8"
+    },
+    {
+      "name": "VIVA HD",
+      "logo": "http://i.imgur.com/CZMldQu.png",
+      "group": "VARIEDADES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1357.m3u8"
+    },
+    {
+      "name": "BIS HD",
+      "logo": "http://i.imgur.com/JNP327k.png",
+      "group": "VARIEDADES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/1415.m3u8"
+    },
+    {
+      "name": "MTV HD",
+      "logo": "http://i.imgur.com/U6Rgjqs.png",
+      "group": "VARIEDADES",
+      "url": "http://painel.iptvmove.com:25461/live/danga07/1963/2357.m3u8"
+    }
+  ]
+}

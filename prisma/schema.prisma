@@ -1,0 +1,112 @@
+
+// O Schema é a Lei (Versão SQLite para Desenvolvimento Ágil)
+// Define a estrutura de dados relacional para a StreamForge.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String   // Deve ser hasheada (bcrypt/argon2)
+  name      String?
+  role      String   @default("USER") // Simulação de Enum para SQLite
+  
+  videos    Video[]
+  history   PlaybackHistory[]
+  favorites Favorite[]
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model PlaybackHistory {
+  id        String   @id @default(uuid())
+  videoId   String
+  userId    String
+  lastTime  Float    @default(0)
+  
+  user      User     @relation(fields: [userId], references: [id])
+  
+  updatedAt DateTime @updatedAt
+
+  @@unique([videoId, userId])
+  @@map("playback_history")
+}
+
+model Favorite {
+  id        String   @id @default(uuid())
+  videoId   String
+  userId    String
+  
+  user      User     @relation(fields: [userId], references: [id])
+  video     Video    @relation(fields: [videoId], references: [id])
+  
+  createdAt DateTime @default(now())
+
+  @@unique([videoId, userId])
+  @@map("favorites")
+}
+
+model Video {
+  id          String      @id @default(uuid())
+  title       String
+  description String?
+  
+  // Pipeline State Machine
+  status      String      @default("WAITING") // WAITING, PROCESSING, READY, FAILED, NEXUS
+  jobId       String?     // ID do Job no Redis/BullMQ para rastreamento
+  
+  // Storage & Delivery
+  originalFilename String
+  storageBucket    String     @default("streamforge-media")
+  storageKey       String?    // Caminho da pasta no S3 (ex: videos/uuid/)
+  hlsPath          String?    // Caminho relativo do manifesto (ex: videos/uuid/index.m3u8)
+  thumbnailPath    String?
+  
+  // Metrics
+  duration    Float?     // Em segundos
+  size        BigInt?    // Em bytes
+  views       Int        @default(0)
+  
+  // Relations
+  userId      String
+  user        User       @relation(fields: [userId], references: [id])
+  
+  favorites   Favorite[]
+  
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@map("videos")
+  @@index([status]) // Otimizar queries de feed
+}
+
+model Addon {
+  id          String   @id @default(uuid())
+  manifestUrl String   @unique // URL do manifesto
+  name        String
+  description String?
+  icon        String?
+  version     String   @default("0.0.1")
+  
+  // Status
+  enabled     Boolean  @default(true)
+  
+  // Relação com Usuário (opcional, pode ser null para addons globais)
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id])
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("addons")
+}

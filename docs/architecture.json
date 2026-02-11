@@ -1,0 +1,37 @@
+
+{
+  "project_name": "StreamForge Core",
+  "version": "1.0.0",
+  "description": "Arquitetura de plataforma de streaming de vídeo on-demand (VOD) com transcodificação HLS escalável e orientada a eventos.",
+  "architectural_pattern": "Event-Driven Modular Monolith",
+  "infrastructure": {
+    "compute": "Docker Containers (Stateless)",
+    "orchestration": "Docker Compose (Dev) / Kubernetes (Prod)",
+    "database": "PostgreSQL 15+ (Single Source of Truth)",
+    "message_broker": "Redis 7 (BullMQ - Job Management)",
+    "object_storage": "MinIO (S3 Compatible) - Armazenamento de mídia bruta e processada",
+    "cdn_gateway": "Nginx (Reverse Proxy & Static Asset Serving)"
+  },
+  "backend_stack": {
+    "language": "Node.js (TypeScript)",
+    "framework": "Fastify ou Express",
+    "orm": "Prisma",
+    "media_engine": "FFmpeg (via Fluent-FFmpeg)",
+    "auth": "JWT (Stateless)"
+  },
+  "data_flow_ingestion": [
+    "1. Client -> API: Upload Video (Multipart/Form-data)",
+    "2. API -> Local Disk (Temp): Staging do arquivo bruto",
+    "3. API -> DB: Cria registro com status 'WAITING'",
+    "4. API -> Redis: Publica Job 'TRANSCODE_VIDEO' com payload { videoId, path }",
+    "5. API -> Client: Retorna 202 Accepted (Não bloqueia)"
+  ],
+  "data_flow_processing": [
+    "1. Worker -> Redis: Consome Job",
+    "2. Worker -> DB: Atualiza status para 'PROCESSING'",
+    "3. Worker -> FFmpeg: Transcodifica MP4 -> HLS (.m3u8 + .ts segments)",
+    "4. Worker -> Object Storage: Upload da pasta HLS completa",
+    "5. Worker -> DB: Atualiza status para 'READY' e define hls_path",
+    "6. Worker -> Disk: Limpeza de arquivos temporários"
+  ]
+}

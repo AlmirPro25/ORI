@@ -1,0 +1,339 @@
+<html lang="pt-BR"><head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Projeto Enterprise</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white min-h-screen">
+    <!--
+    ╔══════════════════════════════════════════════════════════════════════════════╗
+    ║                    🏢 PROJETO ENTERPRISE - ARQUIVOS SEPARADOS                ║
+    ╚══════════════════════════════════════════════════════════════════════════════╝
+    
+    📦 ARQUIVOS INCLUÍDOS (36 total):
+    - docs/architecture.json (json)
+    - docs/openapi.yaml (yaml)
+    - prisma/schema.prisma (prisma)
+    - docs/project-structure.md (markdown)
+    - docs/phase2-instructions.md (markdown)
+    - backend/package.json (json)
+    - backend/tsconfig.json (json)
+    - backend/src/config/env.ts (typescript)
+    - backend/src/utils/prisma.ts (typescript)
+    - backend/src/utils/s3.ts (typescript)
+    - backend/src/middleware/auth.ts (typescript)
+    - backend/src/middleware/upload.ts (typescript)
+    - backend/src/queue/producer.ts (typescript)
+    - backend/src/queue/consumer.ts (typescript)
+    - backend/src/controllers/authController.ts (typescript)
+    - backend/src/controllers/videoController.ts (typescript)
+    - backend/src/routes.ts (typescript)
+    - backend/src/server.ts (typescript)
+    - backend/src/worker.ts (typescript)
+    - frontend/src/types/schema.ts (typescript)
+    - frontend/src/stores/auth.store.ts (typescript)
+    - frontend/src/lib/axios.ts (typescript)
+    - frontend/src/services/api/auth.service.ts (typescript)
+    - frontend/src/services/api/video.service.ts (typescript)
+    - frontend/src/hooks/useAuth.ts (typescript)
+    - frontend/src/hooks/useVideos.ts (typescript)
+    - docker/Dockerfile.backend (dockerfile)
+    - docker/Dockerfile.frontend (dockerfile)
+    - docker-compose.yml (yaml)
+    - docker-compose.prod.yml (yaml)
+    - .github/workflows/ci.yml (yaml)
+    - .github/workflows/deploy.yml (yaml)
+    - tests/e2e/auth.spec.ts (typescript)
+    - .env.example (plaintext)
+    - README.md (markdown)
+    - DEPLOYMENT.md (markdown)
+    
+    🚀 INSTRUÇÕES:
+    1. Este projeto foi gerado pelo Enterprise Pipeline (multi-chamadas)
+    2. Os arquivos estão em tags <script type="text/plain" data-path="...">
+    3. Use o botão "Exportar Projeto" para extrair todos os arquivos como ZIP
+    4. Ou clique em "Ver Arquivos" para navegar pela estrutura
+    -->
+    
+    <div class="max-w-4xl mx-auto p-8">
+        <div class="bg-gray-800 rounded-xl p-6 shadow-2xl">
+            <h1 class="text-3xl font-bold mb-4 flex items-center gap-3">
+                🏢 Projeto Enterprise Completo
+            </h1>
+            <p class="text-gray-400 mb-6">
+                Este projeto contém 36 arquivos gerados pelo Enterprise Pipeline.
+            </p>
+            
+            <h2 class="text-xl font-semibold mb-3 text-blue-400">📦 Arquivos do Projeto</h2>
+            <div class="bg-gray-900 rounded-lg p-4 mb-6">
+                <ul class="space-y-2">
+                    
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">docs/architecture.json</code>
+                        <span class="text-xs text-gray-500">(json)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">docs/openapi.yaml</code>
+                        <span class="text-xs text-gray-500">(yaml)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">prisma/schema.prisma</code>
+                        <span class="text-xs text-gray-500">(prisma)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">docs/project-structure.md</code>
+                        <span class="text-xs text-gray-500">(markdown)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">docs/phase2-instructions.md</code>
+                        <span class="text-xs text-gray-500">(markdown)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">backend/package.json</code>
+                        <span class="text-xs text-gray-500">(json)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">backend/tsconfig.json</code>
+                        <span class="text-xs text-gray-500">(json)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">backend/src/config/env.ts</code>
+                        <span class="text-xs text-gray-500">(typescript)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">backend/src/utils/prisma.ts</code>
+                        <span class="text-xs text-gray-500">(typescript)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">backend/src/utils/s3.ts</code>
+                        <span class="text-xs text-gray-500">(typescript)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">backend/src/middleware/auth.ts</code>
+                        <span class="text-xs text-gray-500">(typescript)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">backend/src/middleware/upload.ts</code>
+                        <span class="text-xs text-gray-500">(typescript)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">backend/src/queue/producer.ts</code>
+                        <span class="text-xs text-gray-500">(typescript)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">backend/src/queue/consumer.ts</code>
+                        <span class="text-xs text-gray-500">(typescript)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">backend/src/controllers/authController.ts</code>
+                        <span class="text-xs text-gray-500">(typescript)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">backend/src/controllers/videoController.ts</code>
+                        <span class="text-xs text-gray-500">(typescript)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">backend/src/routes.ts</code>
+                        <span class="text-xs text-gray-500">(typescript)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">backend/src/server.ts</code>
+                        <span class="text-xs text-gray-500">(typescript)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">backend/src/worker.ts</code>
+                        <span class="text-xs text-gray-500">(typescript)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">frontend/src/types/schema.ts</code>
+                        <span class="text-xs text-gray-500">(typescript)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">frontend/src/stores/auth.store.ts</code>
+                        <span class="text-xs text-gray-500">(typescript)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">frontend/src/lib/axios.ts</code>
+                        <span class="text-xs text-gray-500">(typescript)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">frontend/src/services/api/auth.service.ts</code>
+                        <span class="text-xs text-gray-500">(typescript)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">frontend/src/services/api/video.service.ts</code>
+                        <span class="text-xs text-gray-500">(typescript)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">frontend/src/hooks/useAuth.ts</code>
+                        <span class="text-xs text-gray-500">(typescript)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">frontend/src/hooks/useVideos.ts</code>
+                        <span class="text-xs text-gray-500">(typescript)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">docker/Dockerfile.backend</code>
+                        <span class="text-xs text-gray-500">(dockerfile)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">docker/Dockerfile.frontend</code>
+                        <span class="text-xs text-gray-500">(dockerfile)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">docker-compose.yml</code>
+                        <span class="text-xs text-gray-500">(yaml)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">docker-compose.prod.yml</code>
+                        <span class="text-xs text-gray-500">(yaml)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">.github/workflows/ci.yml</code>
+                        <span class="text-xs text-gray-500">(yaml)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">.github/workflows/deploy.yml</code>
+                        <span class="text-xs text-gray-500">(yaml)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">tests/e2e/auth.spec.ts</code>
+                        <span class="text-xs text-gray-500">(typescript)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">.env.example</code>
+                        <span class="text-xs text-gray-500">(plaintext)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">README.md</code>
+                        <span class="text-xs text-gray-500">(markdown)</span>
+                    </li>
+                    <li class="flex items-center gap-2">
+                        <span class="text-green-400">✓</span>
+                        <code class="text-sm bg-gray-800 px-2 py-1 rounded">DEPLOYMENT.md</code>
+                        <span class="text-xs text-gray-500">(markdown)</span>
+                    </li>
+                </ul>
+            </div>
+            
+            <div class="bg-blue-900/30 border border-blue-500/30 rounded-lg p-4">
+                <h3 class="font-semibold text-blue-400 mb-2">💡 Como usar:</h3>
+                <ol class="list-decimal list-inside space-y-1 text-gray-300">
+                    <li>Clique em <strong>"Ver Arquivos"</strong> no painel lateral</li>
+                    <li>Navegue pela estrutura do projeto</li>
+                    <li>Clique em <strong>"Exportar Projeto"</strong> para baixar o ZIP</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+</body></html>

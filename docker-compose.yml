@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  # 🏭 The Guardian (Back-End)
+  backend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.backend
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      # Variaveis de ambiente para o container
+      NODE_ENV: production
+      PORT: 3000
+      YOUTUBE_API_KEY: ${YOUTUBE_API_KEY}
+    volumes:
+      # Data Persistence (Videos, Torrents, SQLite)
+      - ./data:/app/data
+      - ./backend/storage:/app/storage
+      - ./backend/uploads:/app/uploads
+      # SQLite
+      - ./backend/prisma/dev.db:/app/prisma/dev.db
+
+  # 🖥️ The Console (Front-End)
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    depends_on:
+      - backend
+    restart: always
+    ports:
+      # Porta publica da VM (ex: 80 ou 8080)
+      - "80:80"
+
+# Redes isoladas para seguranca interna
+networks:
+  default:
+    driver: bridge

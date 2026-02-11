@@ -1,0 +1,334 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model User {
+  id                 String            @id @default(uuid())
+  email              String            @unique
+  password           String
+  name               String
+  role               String            @default("USER")
+  reputationScore    Float             @default(100)
+  totalUploadBytes   Float             @default(0)
+  totalDownloadBytes Float             @default(0)
+  totalWatchMinutes  Float             @default(0)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  comments           Comment[]
+  favorites          Favorite[]
+  likes              Like[]
+  playbackHistory    PlaybackHistory[]
+  videos             Video[]
+  watchSessions      WatchSession[]
+}
+
+model Video {
+  id               String            @id @default(uuid())
+  title            String
+  description      String?
+  category         String            @default("Geral")
+  originalFilename String
+  storageKey       String?
+  hlsPath          String?
+  thumbnailPath    String?
+  tags             String?
+  duration         Float?
+  quality          String?
+  fileSize         Float?
+  hlsSizeMB        Float?
+  views            Int               @default(0)
+  lastViewedAt     DateTime?
+  status           String            @default("WAITING")
+  isPredictive     Boolean           @default(false)
+  audioTracks      String?
+  subtitleTracks   String?
+  hasDubbed        Boolean           @default(false)
+  hasPortuguese    Boolean           @default(false)
+  hasPortugueseAudio Boolean         @default(false)
+  hasPortugueseSubs  Boolean         @default(false)
+  originalTitle      String?
+  userId           String
+  tmdbId           String?           // ID do TheMovieDB para metadados
+  imdbId           String?           // ID do IMDb para addons
+  materializationRequestedAt DateTime? // Data em que o usuário pediu para baixar (analytics/queue)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  comments         Comment[]
+  episode          Episode?
+  favorites        Favorite[]
+  likes            Like[]
+  playbackHistory  PlaybackHistory[]
+  user             User              @relation(fields: [userId], references: [id])
+}
+
+model Comment {
+  id        String   @id @default(uuid())
+  content   String
+  videoId   String
+  userId    String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+}
+
+model Like {
+  id        String   @id @default(uuid())
+  videoId   String
+  userId    String
+  isLike    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([videoId, userId])
+}
+
+model PlaybackHistory {
+  id        String   @id @default(uuid())
+  videoId   String
+  userId    String
+  lastTime  Float
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([videoId, userId])
+}
+
+model Favorite {
+  id        String   @id @default(uuid())
+  videoId   String
+  userId    String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([videoId, userId])
+}
+
+model WatchSession {
+  id           String   @id @default(uuid())
+  userId       String
+  videoId      String
+  startTime    Float
+  endTime      Float
+  duration     Float
+  completed    Boolean  @default(false)
+  abandoned    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  avgBitrate   Float?   @default(0)
+  bufferEvents Int?     @default(0)
+  bytesDisk    Float?   @default(0)
+  bytesNetwork Float?   @default(0)
+  source       String?
+  ttff         Int?
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([videoId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model SwarmHealth {
+  id          String   @id @default(uuid())
+  contentHash String   @unique
+  videoId     String?
+  peers       Int      @default(0)
+  seeds       Int      @default(0)
+  avgSpeed    Float    @default(0)
+  lastSeen    DateTime @default(now())
+  healthScore Float    @default(0)
+  updatedAt   DateTime @updatedAt
+
+  @@index([contentHash])
+  @@index([healthScore])
+}
+
+model ContentStats {
+  id             String   @id @default(uuid())
+  videoId        String   @unique
+  views24h       Int      @default(0)
+  viewsTotal     Int      @default(0)
+  completionRate Float    @default(0)
+  avgWatchTime   Float    @default(0)
+  trendingScore  Float    @default(0)
+  recommendScore Float    @default(0)
+  lastCalculated DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([recommendScore])
+  @@index([trendingScore])
+}
+
+model UserProfile {
+  id               String   @id @default(uuid())
+  userId           String   @unique
+  preferredGenres  String?
+  avgSessionTime   Float    @default(0)
+  completionRate   Float    @default(0)
+  preferredQuality String   @default("1080p")
+  avgBandwidth     Float    @default(0)
+  lastActive       DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model DownloadQueue {
+  id             String    @id @default(uuid())
+  videoId        String    @unique
+  magnetURI      String
+  infoHash       String?
+  status         String    @default("QUEUED")
+  priority       Int       @default(0)
+  fileIndex      Int?      // V2.5: Índice do arquivo específico
+  progress       Float     @default(0)
+  downloadSpeed  Float     @default(0)
+  uploadSpeed    Float     @default(0)
+  peers          Int       @default(0)
+  seeds          Int       @default(0)
+  eta            Int?
+  error          String?
+  queuedAt       DateTime  @default(now())
+  startedAt      DateTime?
+  completedAt    DateTime?
+  processingTime Int?
+  totalSize      Float?
+  fileName       String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  // 🛡️ Retry Mechanism (Industrial Reliability)
+  retryCount     Int       @default(0)
+  maxRetries     Int       @default(3)
+  nextRetryAt    DateTime?
+
+  @@index([status])
+  @@index([priority])
+  @@index([queuedAt])
+}
+
+model SeedState {
+  id        String   @id @default(uuid())
+  videoId   String   @unique
+  infoHash  String
+  magnetURI String
+  seedUntil DateTime
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([seedUntil])
+  @@index([isActive])
+}
+
+model SystemStats {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  valueFloat  Float?
+  valueInt    Int?
+  valueString String?
+  updatedAt   DateTime @updatedAt
+}
+
+model Series {
+  id            String    @id @default(uuid())
+  title         String
+  overview      String?
+  poster        String?
+  backdrop      String?
+  totalSeasons  Int       @default(0)
+  totalEpisodes Int       @default(0)
+  tmdbId        Int?      @unique
+  imdbId        String?
+  status        String    @default("ONGOING")
+  firstAirDate  DateTime?
+  lastAirDate   DateTime?
+  genres        String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  episodes      Episode[]
+  seasons       Season[]
+}
+
+model Season {
+  id           String    @id @default(uuid())
+  seriesId     String
+  seasonNumber Int
+  name         String?
+  overview     String?
+  poster       String?
+  episodeCount Int       @default(0)
+  airDate      DateTime?
+  createdAt    DateTime  @default(now())
+  episodes     Episode[]
+  series       Series    @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+
+  @@unique([seriesId, seasonNumber])
+}
+
+model Episode {
+  id            String    @id @default(uuid())
+  seriesId      String
+  seasonId      String
+  seasonNumber  Int
+  episodeNumber Int
+  title         String
+  overview      String?
+  duration      Int?
+  airDate       DateTime?
+  stillPath     String?
+  videoId       String?   @unique
+  status        String    @default("NOT_DOWNLOADED")
+  magnetLink    String?
+  torrentFileIndex Int?     // Índice do arquivo dentro do torrent
+  torrentFileRelativePath String? // Caminho relativo do arquivo no torrent
+  fileSize      Float?
+  quality       String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  video         Video?    @relation(fields: [videoId], references: [id])
+  season        Season    @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  series        Series    @relation(fields: [seriesId], references: [id], onDelete: Cascade)
+
+  @@unique([seriesId, seasonNumber, episodeNumber])
+  @@index([seriesId, seasonNumber])
+}
+
+model Addon {
+  id          String   @id @default(uuid())
+  manifestUrl String   @unique
+  name        String
+  description String?
+  version     String?
+  enabled     Boolean  @default(true)
+  types       String?  // JSON array: ["movie","series"]
+  resources   String?  // JSON array: ["stream","catalog"]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model SemanticCache {
+  id              String   @id @default(uuid())
+  term            String   @unique // A query sanitizada (ex: "a origem")
+  tmdbId          Int?
+  mediaType       String?
+  titlePt         String?
+  titleEn         String?
+  originalTitle   String?
+  year            String?
+  posterPath      String?
+  backdropPath    String?
+  overview        String?
+  voteAverage     Float?
+  expiresAt       DateTime
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([term])
+}
