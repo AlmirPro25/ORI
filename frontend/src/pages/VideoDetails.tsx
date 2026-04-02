@@ -48,6 +48,7 @@ export const VideoDetailsPage: React.FC = () => {
     // My List & Share States
     const [isInMyList, setIsInMyList] = useState(false);
     const [justShared, setJustShared] = useState(false);
+    const [isMaterializing, setIsMaterializing] = useState(false);
 
     // Memoized Handlers to prevent infinite loops
     const handleProgress = React.useCallback((s: any) => {
@@ -96,6 +97,19 @@ export const VideoDetailsPage: React.FC = () => {
         navigator.clipboard.writeText(window.location.href);
         setJustShared(true);
         setTimeout(() => setJustShared(false), 2000);
+    };
+
+    const handleMaterialize = async () => {
+        if (!id) return;
+        setIsMaterializing(true);
+        try {
+            await apiClient.post(`/videos/${id}/play`);
+            window.location.reload();
+        } catch (e) {
+            alert('Erro ao iniciar materialização.');
+        } finally {
+            setIsMaterializing(false);
+        }
     };
 
     const fetchStats = async () => {
@@ -175,7 +189,8 @@ export const VideoDetailsPage: React.FC = () => {
         );
     }
 
-    const hlsFullUrl = video.hlsPath ? `${STORAGE_BASE_URL}/${video.hlsPath}` : null;
+    const hlsFullUrl = video.hlsPath && !video.hlsPath.startsWith('magnet:') ? `${STORAGE_BASE_URL}/${video.hlsPath}` : null;
+    const streamUrl = `http://localhost:3000/api/v1/videos/${video.id}/stream`;
 
     return (
         <div className="min-h-screen bg-background text-foreground pb-20 pt-32 relative overflow-hidden">
@@ -194,22 +209,14 @@ export const VideoDetailsPage: React.FC = () => {
             {/* Cinematic Player Section */}
             <div className="relative w-full aspect-video md:h-[85vh] bg-black overflow-hidden group">
                 <div className="absolute inset-0 flex items-center justify-center">
-                    {(video.status === 'READY' || video.status === 'NEXUS') && video.storageKey ? (
+                    {video.status === 'READY' ? (
                         // Vídeo local com streaming direto ou via Torrent Gateway
-                        <video
-                            controls
-                            className="w-full h-full"
-                            src={`http://localhost:3000/api/v1/videos/${video.id}/stream`}
-                            onTimeUpdate={(e) => {
-                                const currentTime = (e.target as HTMLVideoElement).currentTime;
-                                handleProgress(currentTime);
-                            }}
-                        />
+                        <PlayerComponent hlsUrl={hlsFullUrl || streamUrl} />
                     ) : video.status === 'CATALOG' ? (
                         // CLIQUE PARA INICIAR STREAMING (CATÁLOGO)
                         <div className="w-full h-full relative group">
                             <img
-                                src={video.thumbnailPath ? `${STORAGE_BASE_URL}/${video.thumbnailPath}` : ''}
+                                src={video.thumbnailPath ? (video.thumbnailPath.startsWith('http') ? video.thumbnailPath : `${STORAGE_BASE_URL}/${video.thumbnailPath}`) : ''}
                                 className="absolute inset-0 w-full h-full object-cover opacity-60 group-hover:opacity-40 transition-opacity duration-700"
                             />
                             <div className="absolute inset-0 bg-gradient-to-t from-black via-black/50 to-transparent" />
@@ -218,16 +225,7 @@ export const VideoDetailsPage: React.FC = () => {
                                 <motion.button
                                     whileHover={{ scale: 1.1 }}
                                     whileTap={{ scale: 0.95 }}
-                                    onClick={async () => {
-                                        try {
-                                            // Trigger Play/Materialization
-                                            await apiClient.post(`/videos/${video.id}/play`);
-                                            // Como o ID é mantido, apenas recarregamos para pegar o novo status (PROCESSING)
-                                            window.location.reload();
-                                        } catch (e) {
-                                            alert('Erro ao iniciar streaming.');
-                                        }
-                                    }}
+                                    onClick={handleMaterialize}
                                     className="w-24 h-24 rounded-full bg-primary text-black flex items-center justify-center shadow-[0_0_50px_rgba(var(--primary),0.6)] group-hover:shadow-[0_0_80px_rgba(var(--primary),0.8)] transition-all duration-500"
                                 >
                                     <svg viewBox="0 0 24 24" fill="currentColor" className="w-10 h-10 ml-1">
@@ -240,10 +238,7 @@ export const VideoDetailsPage: React.FC = () => {
                                 </div>
                             </div>
                         </div>
-                    ) : video.status === 'READY' && hlsFullUrl ? (
-                        <PlayerComponent hlsUrl={hlsFullUrl} />
                     ) : video.status === 'NEXUS' && video.hlsPath ? (
-                        // ... antigo player P2P ...
                         <div className="w-full h-full relative">
                             <TorrentPlayer
                                 magnetURI={video.hlsPath}
@@ -251,6 +246,16 @@ export const VideoDetailsPage: React.FC = () => {
                                 onReady={handleTorrentReady}
                                 onProgress={handleProgress}
                             />
+                            <div className="absolute top-6 right-6 z-20">
+                                <Button
+                                    onClick={handleMaterialize}
+                                    disabled={isMaterializing}
+                                    className="h-12 px-5 rounded-2xl bg-black/70 border border-white/10 text-white hover:bg-black/90 font-black uppercase tracking-[0.2em] text-[10px]"
+                                >
+                                    {isMaterializing ? <Loader2 size={14} className="mr-2 animate-spin" /> : <Database size={14} className="mr-2" />}
+                                    Materializar
+                                </Button>
+                            </div>
                         </div>
                     ) : (
                         // Processing UI

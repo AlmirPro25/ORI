@@ -144,6 +144,42 @@ export const AIChat: React.FC = () => {
         sendMessage(query);
     };
 
+    const openResult = (item: any) => {
+        if (item.magnetLink || item.magnet) {
+            const link = item.magnetLink || item.magnet;
+            window.open(link, '_self');
+            return;
+        }
+
+        if (item.infoHash) {
+            window.open(`magnet:?xt=urn:btih:${item.infoHash}`, '_self');
+            return;
+        }
+
+        if (item.streamUrl) {
+            navigator.clipboard.writeText(item.streamUrl);
+            alert(`URL do canal copiada: ${item.name}`);
+            return;
+        }
+
+        if (item.href) {
+            window.location.href = item.href;
+            return;
+        }
+
+        if (item.media_type === 'tv') {
+            window.location.href = `/series/${item.id}`;
+            return;
+        }
+
+        if (item.media_type === 'movie' || item.status) {
+            window.location.href = `/videos/${item.id}`;
+            return;
+        }
+
+        window.location.href = `/videos/${item.id}`;
+    };
+
     return (
         <>
             {/* Botão Flutuante */}
@@ -257,24 +293,7 @@ export const AIChat: React.FC = () => {
                                                     <div
                                                         key={idx}
                                                         className="bg-black/30 rounded-lg p-2 text-[10px] hover:bg-black/50 cursor-pointer transition-colors border border-white/5"
-                                                        onClick={() => {
-                                                            if (item.magnetLink || item.magnet) {
-                                                                const link = item.magnetLink || item.magnet;
-                                                                console.log('🔗 Abrindo Magnet:', link);
-                                                                window.open(link, '_self');
-                                                            } else if (item.infoHash) {
-                                                                window.open(`magnet:?xt=urn:btih:${item.infoHash}`, '_self');
-                                                            } else if (item.streamUrl) {
-                                                                // IPTV Handling
-                                                                console.log('📺 Abrindo IPTV:', item.streamUrl);
-                                                                // Copiar para clipboard ou abrir player?
-                                                                navigator.clipboard.writeText(item.streamUrl);
-                                                                alert(`URL do canal copiada: ${item.name}`);
-                                                            } else {
-                                                                // Navegação interna
-                                                                window.location.href = `/video/${item.id}`;
-                                                            }
-                                                        }}
+                                                        onClick={() => openResult(item)}
                                                     >
                                                         <div className="flex justify-between items-start">
                                                             <p className="font-bold truncate pr-2">{item.title || item.name}</p>

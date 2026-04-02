@@ -3,12 +3,24 @@ import { Play, Zap, Cpu, Scan, Activity } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { motion, useMotionValue, useTransform, useSpring } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
+import { STORAGE_BASE_URL } from '@/lib/axios';
+import { useDiscoveryFeed } from '@/hooks/useDiscovery';
+
+type HeroCandidate = {
+    id: string;
+    title: string;
+    subtitle: string;
+    image: string;
+    href: string;
+    badge: string;
+    meta: string[];
+    rating: string;
+};
 
 export const HeroSection = () => {
-    // Navigation
     const navigate = useNavigate();
+    const { feed } = useDiscoveryFeed();
 
-    // Mouse Perspective Logic
     const x = useMotionValue(0);
     const y = useMotionValue(0);
 
@@ -29,14 +41,70 @@ export const HeroSection = () => {
     const glowX = useTransform(mouseX, [-0.5, 0.5], [0, 100]);
     const glowY = useTransform(mouseY, [-0.5, 0.5], [0, 100]);
 
+    const featured = React.useMemo<HeroCandidate | null>(() => {
+        if (!feed?.featured) return null;
+
+        const preferredImage = feed.featured.backdrop || feed.featured.image;
+        const image = preferredImage?.startsWith('http')
+            ? preferredImage
+            : preferredImage
+                ? `${STORAGE_BASE_URL}/${preferredImage}`
+                : '';
+
+        if (!image) return null;
+
+        const scoreBoost = feed.featured.views ? feed.featured.views / 30 : feed.featured.score / 15;
+
+        return {
+            id: feed.featured.id,
+            title: feed.featured.title,
+            subtitle: feed.featured.subtitle,
+            image,
+            href: feed.featured.href,
+            badge: feed.featured.badge,
+            meta: [
+                feed.featured.category || 'Catalogo',
+                feed.featured.quality || (feed.featured.kind === 'series' ? 'Serie' : '1080p'),
+                feed.featured.isPortuguese ? 'PT-BR' : feed.featured.status,
+            ].filter(Boolean),
+            rating: Math.min(9.9, 7.4 + scoreBoost).toFixed(1),
+        };
+    }, [feed]);
+
+    const fallbackImage = `data:image/svg+xml;utf8,${encodeURIComponent(`
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 900">
+            <defs>
+                <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+                    <stop offset="0%" stop-color="#05070d"/>
+                    <stop offset="100%" stop-color="#0d1522"/>
+                </linearGradient>
+            </defs>
+            <rect width="1600" height="900" fill="url(#bg)"/>
+            <circle cx="1180" cy="220" r="180" fill="#22d3ee" fill-opacity="0.12"/>
+            <circle cx="420" cy="700" r="220" fill="#38bdf8" fill-opacity="0.08"/>
+            <text x="120" y="420" fill="#e5f7ff" font-size="88" font-family="Arial" font-weight="700">ARCONTE</text>
+            <text x="120" y="510" fill="#6ee7f9" font-size="44" font-family="Arial">sincronizando o catálogo real</text>
+        </svg>
+    `)}`;
+
+    const fallbackFeatured: HeroCandidate = featured || {
+        id: 'fallback',
+        title: 'Arconte Online',
+        subtitle: 'O feed principal agora espera conteúdo real do catálogo. Sem capa de demonstração competindo com a sua biblioteca.',
+        image: fallbackImage,
+        href: '/movies',
+        badge: 'Catalog Real',
+        meta: ['Nexus', 'Curadoria viva', 'Sem mock'],
+        rating: '9.0',
+    };
+
     return (
         <div
             onMouseMove={handleMouseMove}
             className="relative min-h-[90vh] w-full overflow-hidden flex items-center justify-center perspective-1000 bg-background pt-20"
         >
-            {/* 1. Dynamic Cyber-Grid Background */}
             <div className="absolute inset-0 bg-black z-0">
-                <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 brightness-100 contrast-150 mix-blend-overlay" />
+                <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(34,211,238,0.14),transparent_40%),linear-gradient(180deg,#05070d_0%,#05070d_45%,#090d16_100%)]" />
                 <motion.div
                     style={{
                         opacity: 0.4,
@@ -44,17 +112,13 @@ export const HeroSection = () => {
                     }}
                     className="absolute inset-0 transition-opacity duration-300"
                 />
-
-                {/* Animated Grid Floor */}
                 <div className="absolute -bottom-[50%] -left-[50%] w-[200%] h-[200%] bg-[linear-gradient(to_right,#333_1px,transparent_1px),linear-gradient(to_bottom,#333_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)] opacity-20 transform perspective-500 rotate-x-60 animate-grid-flow" />
             </div>
 
-            {/* 2. Main Content Wrapper with 3D Tilt */}
             <motion.div
-                style={{ rotateX, rotateY, transformStyle: "preserve-3d" }}
+                style={{ rotateX, rotateY, transformStyle: 'preserve-3d' }}
                 className="relative z-10 w-full max-w-7xl px-6 grid grid-cols-1 lg:grid-cols-2 gap-12 items-center"
             >
-                {/* LEFT: Typography & Actions */}
                 <div className="space-y-10 transform translate-z-20">
                     <motion.div
                         initial={{ opacity: 0, x: -50 }}
@@ -64,19 +128,19 @@ export const HeroSection = () => {
                     >
                         <div className="px-3 py-1 bg-primary/10 border border-primary/20 rounded-full flex items-center gap-2">
                             <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-                            <span className="text-[10px] font-mono text-primary tracking-widest uppercase">System Online</span>
+                            <span className="text-[10px] font-mono text-primary tracking-widest uppercase">Catalog Online</span>
                         </div>
-                        <span className="text-[10px] font-mono text-white/40 tracking-widest uppercase">v.4.2.0 stable</span>
+                        <span className="text-[10px] font-mono text-white/40 tracking-widest uppercase">{fallbackFeatured.badge}</span>
                     </motion.div>
 
-                    <h1 className="text-6xl sm:text-7xl md:text-8xl lg:text-[7rem] font-black tracking-tighter leading-[0.85] uppercase italic text-white mix-blend-screen drop-shadow-2xl">
+                    <h1 className="text-5xl sm:text-6xl md:text-7xl lg:text-[6rem] font-black tracking-tighter leading-[0.85] uppercase italic text-white mix-blend-screen drop-shadow-2xl">
                         <motion.span
                             initial={{ y: 50, opacity: 0 }}
                             animate={{ y: 0, opacity: 1 }}
                             transition={{ delay: 0.4 }}
                             className="block text-transparent bg-clip-text bg-gradient-to-r from-white via-white/80 to-white/40"
                         >
-                            Future
+                            {fallbackFeatured.title.split(' ').slice(0, 2).join(' ') || fallbackFeatured.title}
                         </motion.span>
                         <motion.span
                             initial={{ y: 50, opacity: 0 }}
@@ -84,7 +148,7 @@ export const HeroSection = () => {
                             transition={{ delay: 0.5 }}
                             className="block text-primary drop-shadow-[0_0_15px_rgba(56,189,248,0.5)]"
                         >
-                            Vision
+                            {fallbackFeatured.title.split(' ').slice(2).join(' ') || 'Em Destaque'}
                         </motion.span>
                     </h1>
 
@@ -94,9 +158,16 @@ export const HeroSection = () => {
                         transition={{ delay: 0.6 }}
                         className="text-lg md:text-xl text-white/60 font-medium leading-relaxed max-w-xl border-l-2 border-primary/30 pl-6"
                     >
-                        Indexação descentralizada de ativos de mídia via protocolo Nexus.
-                        A fronteira final do streaming de alta fidelidade.
+                        {fallbackFeatured.subtitle}
                     </motion.p>
+
+                    <div className="flex flex-wrap gap-3 text-[10px] font-black uppercase tracking-[0.25em] text-white/50">
+                        {fallbackFeatured.meta.map((item) => (
+                            <span key={item} className="px-3 py-1.5 rounded-full border border-white/10 bg-white/5">
+                                {item}
+                            </span>
+                        ))}
+                    </div>
 
                     <motion.div
                         initial={{ opacity: 0, y: 20 }}
@@ -105,18 +176,18 @@ export const HeroSection = () => {
                         className="flex flex-wrap gap-4 pt-4"
                     >
                         <Button
-                            onClick={() => navigate('/movies')}
+                            onClick={() => navigate(fallbackFeatured.href)}
                             className="h-14 px-8 rounded-2xl bg-white text-black font-black uppercase tracking-widest hover:scale-105 active:scale-95 transition-all shadow-[0_0_30px_-5px_white] hover:bg-white/90 group"
                         >
                             <Play size={18} className="mr-2 group-hover:scale-125 transition-transform" fill="currentColor" />
-                            Iniciar
+                            Assistir
                         </Button>
                         <Button
-                            onClick={() => navigate('/tv')}
+                            onClick={() => navigate('/series')}
                             className="h-14 px-8 rounded-2xl bg-cyan-500 text-black font-black uppercase tracking-widest hover:scale-105 active:scale-95 transition-all shadow-[0_0_30px_-5px_rgb(6,182,212)] hover:bg-cyan-400 group"
                         >
                             <Activity size={18} className="mr-2" />
-                            TV ao Vivo
+                            Series
                         </Button>
                         <Button
                             onClick={() => navigate('/stats')}
@@ -129,32 +200,28 @@ export const HeroSection = () => {
                     </motion.div>
                 </div>
 
-                {/* RIGHT: Featured Glitch Card */}
                 <div className="hidden lg:flex justify-end transform translate-z-40 perspective-500">
                     <motion.div
                         initial={{ opacity: 0, scale: 0.8, rotateY: -15 }}
                         animate={{ opacity: 1, scale: 1, rotateY: -15 }}
-                        transition={{ delay: 0.6, type: "spring" }}
+                        transition={{ delay: 0.6, type: 'spring' }}
                         className="relative w-[400px] h-[580px] group cursor-pointer"
+                        onClick={() => navigate(fallbackFeatured.href)}
                     >
-                        {/* Glow Behind */}
                         <div className="absolute inset-0 bg-primary/20 blur-[80px] -z-10 group-hover:bg-primary/30 transition-all duration-700" />
 
-                        {/* The Card */}
                         <div className="relative h-full w-full rounded-[2.5rem] overflow-hidden bg-black border border-white/10 shadow-2xl transition-all duration-500 group-hover:scale-[1.02] group-hover:border-primary/50">
                             <img
-                                src="https://images.unsplash.com/photo-1626814026160-2237a95fc5a0?q=80&w=3540&auto=format&fit=crop"
+                                src={fallbackFeatured.image}
                                 className="absolute inset-0 w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity duration-500"
-                                alt="Featured"
+                                alt={fallbackFeatured.title}
                             />
 
-                            {/* Overlay Gradient */}
                             <div className="absolute inset-0 bg-gradient-to-t from-black via-black/20 to-transparent opacity-90" />
 
-                            {/* Holo UI Elements on Card */}
                             <div className="absolute top-6 left-6 right-6 flex justify-between items-start">
                                 <div className="px-3 py-1 rounded-full bg-white/10 backdrop-blur-md border border-white/10 text-[10px] font-black uppercase tracking-widest text-white">
-                                    Trending Now
+                                    {fallbackFeatured.badge}
                                 </div>
                                 <Scan className="text-white/60 w-6 h-6 animate-pulse" />
                             </div>
@@ -162,38 +229,41 @@ export const HeroSection = () => {
                             <div className="absolute bottom-10 left-8 right-8 space-y-4">
                                 <div className="flex items-center gap-2 mb-2">
                                     <Cpu size={16} className="text-primary" />
-                                    <span className="text-xs font-mono text-primary uppercase tracking-widest">AI Upscaled</span>
+                                    <span className="text-xs font-mono text-primary uppercase tracking-widest">Arconte Curated</span>
                                 </div>
                                 <h3 className="text-4xl font-black uppercase italic leading-none text-white">
-                                    Cyber <br /> <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary to-purple-500">Chronicles</span>
+                                    {fallbackFeatured.title.split(' ').slice(0, 2).join(' ')}
+                                    <br />
+                                    <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary to-cyan-300">
+                                        {fallbackFeatured.title.split(' ').slice(2).join(' ') || 'Signal'}
+                                    </span>
                                 </h3>
                                 <div className="flex items-center gap-4 text-xs font-bold text-white/60 pt-2">
-                                    <span>Season 1</span>
-                                    <span className="w-1 h-1 bg-white/40 rounded-full" />
-                                    <span>2026</span>
-                                    <span className="w-1 h-1 bg-white/40 rounded-full" />
-                                    <span>Nexus Original</span>
+                                    {fallbackFeatured.meta.map((item) => (
+                                        <React.Fragment key={item}>
+                                            <span>{item}</span>
+                                            <span className="w-1 h-1 bg-white/40 rounded-full" />
+                                        </React.Fragment>
+                                    )).slice(0, 5)}
                                 </div>
                             </div>
                         </div>
 
-                        {/* Floating Stats Badge */}
                         <motion.div
                             animate={{ y: [0, -10, 0] }}
-                            transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
+                            transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
                             className="absolute -right-8 top-20 w-32 p-4 bg-black/60 backdrop-blur-xl border border-white/10 rounded-2xl shadow-xl z-20"
                         >
                             <div className="flex items-center gap-3 mb-2">
                                 <Zap size={16} className="text-yellow-400 fill-yellow-400" />
                                 <span className="text-[10px] font-bold text-white uppercase">Rating</span>
                             </div>
-                            <div className="text-3xl font-black text-white italic">9.8</div>
+                            <div className="text-3xl font-black text-white italic">{fallbackFeatured.rating}</div>
                         </motion.div>
                     </motion.div>
                 </div>
             </motion.div>
 
-            {/* Bottom Fade */}
             <div className="absolute bottom-0 w-full h-32 bg-gradient-to-t from-background to-transparent z-20 pointer-events-none" />
         </div>
     );

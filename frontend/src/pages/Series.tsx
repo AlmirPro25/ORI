@@ -12,6 +12,7 @@ import {
     Sparkles
 } from 'lucide-react';
 import { useSeriesList } from '@/hooks/useSeries';
+import { useDiscoveryFeed } from '@/hooks/useDiscovery';
 import SeriesService from '@/services/api/series.service';
 import { Series } from '@/types/series';
 
@@ -248,17 +249,44 @@ const AddSeriesModal: React.FC<{ open: boolean; onClose: () => void; onCreated: 
 // ==========================================
 export const SeriesPage: React.FC = () => {
     const { series, loading, error: _error, refresh } = useSeriesList();
+    const { feed } = useDiscoveryFeed();
     const [searchQuery, setSearchQuery] = useState('');
     const [showAddModal, setShowAddModal] = useState(false);
 
     const filteredSeries = React.useMemo(() => {
-        if (!searchQuery.trim()) return series;
+        const portugueseSeries = new Set(
+            (feed?.series || [])
+                .filter((item) => item.kind === 'series' && (item.isPortuguese || item.isDubbed))
+                .map((item) => item.id)
+        );
+        const discoveryOrder = new Map(
+            (feed?.series || [])
+                .filter((item) => item.kind === 'series')
+                .map((item, index) => [item.id, index])
+        );
+
+        const rankedSeries = [...series].sort((a, b) => {
+            const indexA = discoveryOrder.get(a.id);
+            const indexB = discoveryOrder.get(b.id);
+            const ptbrA = portugueseSeries.has(a.id);
+            const ptbrB = portugueseSeries.has(b.id);
+
+            if (ptbrA !== ptbrB) return ptbrA ? -1 : 1;
+
+            if (indexA !== undefined && indexB !== undefined) return indexA - indexB;
+            if (indexA !== undefined) return -1;
+            if (indexB !== undefined) return 1;
+
+            return (Number(b.progress) || 0) - (Number(a.progress) || 0);
+        });
+
+        if (!searchQuery.trim()) return rankedSeries;
         const q = searchQuery.toLowerCase();
-        return series.filter(s =>
+        return rankedSeries.filter(s =>
             s.title.toLowerCase().includes(q) ||
             s.genres?.toLowerCase().includes(q)
         );
-    }, [series, searchQuery]);
+    }, [series, searchQuery, feed]);
 
     if (loading) {
         return (

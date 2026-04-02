@@ -1,6 +1,6 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
-import { Loader2, AlertTriangle, Download, RefreshCw, Wifi, Server, Globe, MessageSquare, List, Send, Activity, ChevronDown, Plus, Subtitles, Trash2, Headphones, Volume2 } from 'lucide-react';
+import { Loader2, AlertTriangle, Download, RefreshCw, Wifi, Server, Globe, MessageSquare, List, Send, Activity, ChevronDown, Plus, Subtitles, Trash2, Headphones, Volume2, Maximize, Minimize, Pause, Play, VolumeX } from 'lucide-react';
 // @ts-ignore
 import WebTorrent from 'webtorrent/dist/webtorrent.min.js';
 import { io, Socket } from 'socket.io-client';
@@ -27,6 +27,7 @@ interface ChatMessage {
 }
 
 export const TorrentPlayer: React.FC<TorrentPlayerProps> = ({ magnetURI, videoId, onReady, onProgress }) => {
+    const containerRef = useRef<HTMLDivElement>(null);
     const videoRef = useRef<HTMLVideoElement>(null);
     const socketRef = useRef<Socket | null>(null);
 
@@ -55,15 +56,25 @@ export const TorrentPlayer: React.FC<TorrentPlayerProps> = ({ magnetURI, videoId
     const [externalAudioFiles, setExternalAudioFiles] = useState<any[]>([]);
     const [currentAudioTrack, setCurrentAudioTrack] = useState<number>(0);
     const [currentExternalAudio, setCurrentExternalAudio] = useState<number>(-1);
+    const [currentTime, setCurrentTime] = useState(0);
+    const [duration, setDuration] = useState(0);
 
     // Server-side Multi-audio properties
     const [serverAudioTracks, setServerAudioTracks] = useState<any[]>([]);
     const [activeFileParams, setActiveFileParams] = useState<{ infoHash: string, fileIndex: number } | null>(null);
     const [isTranscoding, setIsTranscoding] = useState(false);
+    const [isMuted, setIsMuted] = useState(false);
+    const [isFullscreen, setIsFullscreen] = useState(false);
 
     const clientRef = useRef<any>(null);
     const torrentRef = useRef<any>(null);
     const audioRef = useRef<HTMLAudioElement | null>(null);
+
+    const needsCompatibleGatewayStream = useCallback((fileName?: string) => {
+        const name = String(fileName || '').toLowerCase();
+        if (!name) return false;
+        return /x265|hevc|10bit|2160p|4k/.test(name) || name.endsWith('.mkv');
+    }, []);
 
     // --- GATEWAY HEALTH CHECK ---
     useEffect(() => {
@@ -457,6 +468,43 @@ export const TorrentPlayer: React.FC<TorrentPlayerProps> = ({ magnetURI, videoId
         }
     }, [status, detectAudioTracks]);
 
+    const togglePlayPause = useCallback(() => {
+        const video = videoRef.current;
+        if (!video) return;
+
+        if (video.paused) {
+            video.play().catch((error) => console.warn('Falha ao retomar vídeo:', error));
+        } else {
+            video.pause();
+        }
+    }, []);
+
+    const toggleMute = useCallback(() => {
+        const video = videoRef.current;
+        if (!video) return;
+
+        const nextMuted = !video.muted;
+        video.muted = nextMuted;
+        setIsMuted(nextMuted);
+    }, []);
+
+    const toggleFullscreen = useCallback(async () => {
+        const container = containerRef.current;
+        if (!container) return;
+
+        try {
+            if (document.fullscreenElement) {
+                await document.exitFullscreen();
+                setIsFullscreen(false);
+            } else {
+                await container.requestFullscreen();
+                setIsFullscreen(true);
+            }
+        } catch (error) {
+            console.warn('Falha ao alternar tela cheia:', error);
+        }
+    }, []);
+
     const handleLocalSubtitle = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file || !videoRef.current) return;
@@ -504,6 +552,9 @@ export const TorrentPlayer: React.FC<TorrentPlayerProps> = ({ magnetURI, videoId
             if (videoRef.current.src === url) return;
 
             console.log(`🎬 Configurando stream: ${url.substring(0, 50)}...`);
+            videoRef.current.autoplay = true;
+            videoRef.current.playsInline = true;
+            videoRef.current.preload = 'auto';
             videoRef.current.src = url;
             videoRef.current.load();
             loadHistory();
@@ -594,7 +645,15 @@ export const TorrentPlayer: React.FC<TorrentPlayerProps> = ({ magnetURI, videoId
                     .catch(e => console.warn('Falha ao buscar metadados do servidor', e));
 
                 detectExternalAudio(files); // Detectar áudios externos
-                setupVideo(`${GATEWAY_URL}${videoFile.streamUrl}`);
+                const streamPath = needsCompatibleGatewayStream(videoFile.name)
+                    ? `${GATEWAY_URL}/api/stream-compatible/${torrentInfo.infoHash}/${videoFile.index}`
+                    : `${GATEWAY_URL}${videoFile.streamUrl}`;
+
+                if (streamPath.includes('/api/stream-compatible/')) {
+                    console.log('🛡️ Usando stream compatível para navegador:', videoFile.name);
+                }
+
+                setupVideo(streamPath);
 
                 // Polling stats from gateway
                 const interval = setInterval(async () => {
@@ -709,6 +768,12 @@ export const TorrentPlayer: React.FC<TorrentPlayerProps> = ({ magnetURI, videoId
         return () => clientRef.current?.destroy();
     }, [magnetURI, tryGateway, useP2P]);
 
+    useEffect(() => {
+        const handleFullscreenChange = () => setIsFullscreen(!!document.fullscreenElement);
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    }, []);
+
     const formatBytes = (bytes: number) => {
         if (bytes === 0) return '0 B';
         const k = 1024;
@@ -722,20 +787,55 @@ export const TorrentPlayer: React.FC<TorrentPlayerProps> = ({ magnetURI, videoId
         return (bytes / 1024).toFixed(0) + ' KB/s';
     };
 
+    const formatTime = (seconds: number) => {
+        if (!Number.isFinite(seconds) || seconds < 0) return '00:00';
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = Math.floor(seconds % 60);
+        if (hours > 0) {
+            return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        }
+        return `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    };
+
+    const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const video = videoRef.current;
+        if (!video || !duration) return;
+        const ratio = Number(e.target.value) / 100;
+        video.currentTime = Math.max(0, Math.min(duration, duration * ratio));
+    };
+
     return (
-        <div className="relative w-full aspect-video h-auto bg-black flex flex-col md:flex-row overflow-hidden md:rounded-3xl border-y md:border border-white/10 group shadow-2xl">
+        <div ref={containerRef} className="relative w-full aspect-video h-auto bg-black flex flex-col md:flex-row overflow-hidden md:rounded-3xl border-y md:border border-white/10 group shadow-2xl">
             {/* ÁREA DO VÍDEO */}
             <div className="flex-1 relative bg-black flex items-center justify-center overflow-hidden">
                 <video
                     ref={videoRef}
                     className="w-full h-full object-contain"
-                    controls
+                    autoPlay
+                    playsInline
+                    preload="auto"
                     onTimeUpdate={() => {
                         const time = Math.round(videoRef.current?.currentTime || 0);
+                        setCurrentTime(videoRef.current?.currentTime || 0);
                         if (time > 0 && time % 10 === 0) saveHistory();
+                    }}
+                    onLoadedMetadata={() => setDuration(videoRef.current?.duration || 0)}
+                    onCanPlay={() => {
+                        const video = videoRef.current;
+                        if (!video) return;
+                        video.play().catch((error) => {
+                            if (error?.name !== 'AbortError') {
+                                console.warn('Falha ao iniciar stream no canplay:', error);
+                            }
+                        });
                     }}
                     onWaiting={() => setStatus('BUFFERING')}
                     onPlaying={() => setStatus('PLAYING')}
+                    onPause={() => {
+                        const video = videoRef.current;
+                        if (!video?.ended) setStatus('BUFFERING');
+                    }}
                 />
 
                 {/* Swarm Visualizer Overlay */}
@@ -877,6 +977,71 @@ export const TorrentPlayer: React.FC<TorrentPlayerProps> = ({ magnetURI, videoId
                             <AlertTriangle size={8} /> Error
                         </div>
                     )}
+                </div>
+
+                <div className="absolute left-0 right-0 bottom-0 z-50 bg-gradient-to-t from-black/95 via-black/70 to-transparent px-4 md:px-6 pb-4 pt-16 pointer-events-auto">
+                    <div className="flex items-center gap-3 md:gap-4">
+                        <button
+                            onClick={togglePlayPause}
+                            className="p-3 rounded-2xl bg-black/65 backdrop-blur-md border border-white/10 text-white hover:bg-primary hover:text-black transition-all shadow-xl"
+                            title="Play / Pause"
+                        >
+                            {videoRef.current?.paused ?? true ? <Play size={18} /> : <Pause size={18} />}
+                        </button>
+
+                        <div className="hidden sm:flex items-center min-w-[88px] text-white/90 text-xs md:text-sm font-bold font-mono tracking-tight">
+                            {formatTime(currentTime)}
+                        </div>
+
+                        <div className="flex-1 flex flex-col gap-2">
+                            <input
+                                type="range"
+                                min="0"
+                                max="100"
+                                step="0.1"
+                                value={duration ? (currentTime / duration) * 100 : 0}
+                                onChange={handleSeek}
+                                className="w-full h-1.5 appearance-none rounded-full accent-primary bg-white/20 cursor-pointer"
+                            />
+                            <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.18em] text-white/45">
+                                <span>{streamMode === 'gateway' ? 'Gateway' : 'P2P'} • {peers} peers</span>
+                                <span>{formatTime(duration)}</span>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={toggleMute}
+                                className="p-3 rounded-2xl bg-black/65 backdrop-blur-md border border-white/10 text-white hover:bg-white/20 transition-all shadow-xl"
+                                title="Som"
+                            >
+                                {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+                            </button>
+                            <input
+                                type="range"
+                                min="0"
+                                max="1"
+                                step="0.05"
+                                value={videoRef.current ? (videoRef.current.muted ? 0 : videoRef.current.volume) : (isMuted ? 0 : 1)}
+                                onChange={(e) => {
+                                    const video = videoRef.current;
+                                    if (!video) return;
+                                    const nextVolume = Number(e.target.value);
+                                    video.volume = nextVolume;
+                                    video.muted = nextVolume === 0;
+                                    setIsMuted(nextVolume === 0);
+                                }}
+                                className="hidden md:block w-24 h-1.5 appearance-none rounded-full accent-primary bg-white/20 cursor-pointer"
+                            />
+                            <button
+                                onClick={toggleFullscreen}
+                                className="p-3 rounded-2xl bg-black/65 backdrop-blur-md border border-white/10 text-white hover:bg-primary hover:text-black transition-all shadow-xl"
+                                title="Tela cheia"
+                            >
+                                {isFullscreen ? <Minimize size={18} /> : <Maximize size={18} />}
+                            </button>
+                        </div>
+                    </div>
                 </div>
 
 

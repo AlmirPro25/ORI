@@ -15,6 +15,7 @@ import path from 'path';
 const prisma = new PrismaClient();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 const NEXUS_URL = process.env.NEXUS_API_URL || 'http://localhost:3005/api';
+const GEMINI_CHAT_MODEL = process.env.GEMINI_CHAT_MODEL || process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 
 interface ChatMessage {
     role: 'user' | 'assistant';
@@ -29,6 +30,10 @@ interface ChatResponse {
     };
 }
 
+type DirectIntent =
+    | { type: 'torrent' | 'status' | 'iptv' | 'recommend' | 'search'; query: string }
+    | null;
+
 export class AIChatService {
 
     /**
@@ -36,13 +41,18 @@ export class AIChatService {
      */
     static async chat(userMessage: string, history: ChatMessage[] = []): Promise<ChatResponse> {
         try {
+            const directIntent = this.detectDirectIntent(userMessage);
+            if (directIntent) {
+                return this.executeDirectIntent(userMessage, directIntent);
+            }
+
             // Análise de sentimento e contexto
             const sentiment = this.analyzeSentiment(userMessage);
             const context = this.buildContext(history);
 
             // UPGRADE: Usando modelo mais potente (Gemini 3.0 Pro - Latest 2026)
             const model = genAI.getGenerativeModel({
-                model: 'gemini-3.0-pro'
+                model: GEMINI_CHAT_MODEL
             });
 
             const systemPrompt = `Você é o ORION AI 🧠, a Inteligência Central e Administrador do Sistema StreamForge.
@@ -56,7 +66,7 @@ SUA MISSÃO:
 FERRAMENTAS EXECUTÁVEIS (Uso Obrigatório quando relevante):
 - SEARCH: Para buscar filmes/séries no TMDB (metadados).
 - TORRENT: Para buscar LINKS MAGNÉTICOS REAIS no Nexus (1337x, YTS, PirateBay). Use sempre que o usuário quiser "baixar", "assistir" ou "encontrar" algo.
-- RECOMMEND: Para sugerir conteúdo novo baseado em gostos.
+- RECOMMEND: Para sugerir conteúdo novo, montar listas e indicar o que assistir sem o usuário saber o nome.
 - STATUS: Para relatar o estado de saúde do sistema (downloads, serviços).
 - IPTV: Para buscar canais de TV ao vivo.
 
@@ -65,6 +75,8 @@ DIRETRIZES DE PERSONALIDADE:
 - Use emojis sofisticados (🌌, 🧠, ⚡, 🎬, 🇧🇷).
 - Seja assertivo: "Encontrei 5 opções", "Iniciando busca profunda".
 - Priorize conteúdo PT-BR (Dublado/Dual Áudio).
+- Se o usuário pedir "me indica", "cria uma lista", "o que assistir", "surpreenda", "algo para hoje", use RECOMMEND.
+- Quando recomendar, traga resultados REAIS do catálogo local primeiro e complete com tendências reais do TMDB.
 
 REGRA DE LINK MAGNÉTICO:
 - Se o usuário pedir para "baixar", "ver", "assistir" um filme específico, ACIONE a ferramenta 'torrent'.
@@ -85,6 +97,9 @@ Resposta: {"message":"Entendido. Iniciando varredura no Nexus por links magnéti
 
 Usuário: "Como está o sistema?"
 Resposta: {"message":"Verificando status operacional de todos os subsistemas... ⚡", "action":{"type":"status","query":""}}
+
+Usuário: "Me indica filmes para assistir com a família"
+Resposta: {"message":"MonteI uma seleção real com foco em sessão em família e prioridade para conteúdo acessível no sistema. 🎬", "action":{"type":"recommend","query":"filmes para família"}}
 `;
 
             const prompt = `${systemPrompt}\n\nCONTEXTO: ${context}\nSENTIMENTO: ${sentiment}\nHistórico Recente: ${JSON.stringify(history.slice(-3))}\n\nUsuário: ${userMessage}\n\nResponda APENAS com JSON válido:`;
@@ -92,7 +107,7 @@ Resposta: {"message":"Verificando status operacional de todos os subsistemas... 
             const result = await model.generateContent(prompt);
             const responseText = result.response.text();
 
-            console.log('🤖 Gemini 1.5 Pro resposta:', responseText);
+            console.log('🤖 Gemini resposta:', responseText);
 
             // Extrair JSON
             let parsed: any;
@@ -186,8 +201,50 @@ Resposta: {"message":"Verificando status operacional de todos os subsistemas... 
      */
     private static async getRecommendations(title: string) {
         try {
+            const localCatalog = await this.getCatalogRecommendations(title);
+            if (localCatalog.results.length > 0) {
+                return localCatalog;
+            }
+
+            const normalizedTitle = String(title || '').trim();
+            if (!normalizedTitle || this.isGenericRecommendationQuery(normalizedTitle)) {
+                const trendingMovies = await TMDBService.getTrending().catch(() => []);
+                const trendingSeries = await TMDBService.getTrendingSeries().catch(() => []);
+                const mixed = [
+                    ...trendingMovies.slice(0, 8).map((item: any) => ({
+                        id: item.id,
+                        title: item.title,
+                        name: item.title,
+                        overview: item.overview,
+                        poster_path: item.poster_path,
+                        backdrop_path: item.backdrop_path,
+                        vote_average: item.vote_average,
+                        media_type: 'movie',
+                        source: 'tmdb-trending',
+                    })),
+                    ...trendingSeries.slice(0, 4).map((item: any) => ({
+                        id: item.id,
+                        title: item.title,
+                        name: item.title,
+                        overview: item.overview,
+                        poster_path: item.poster_path,
+                        backdrop_path: item.backdrop_path,
+                        vote_average: item.vote_average,
+                        media_type: 'tv',
+                        source: 'tmdb-trending',
+                    })),
+                ];
+
+                return {
+                    results: mixed,
+                    total: mixed.length,
+                    basedOn: 'tendências reais + sinais do catálogo',
+                    tip: '🎯 Se quiser, peça uma lista por clima: família, ação, leve, dublado ou filme da noite.'
+                };
+            }
+
             // Buscar o título primeiro
-            const searchResults = await TMDBService.search(title);
+            const searchResults = await TMDBService.search(normalizedTitle);
             if (searchResults.length === 0) {
                 return { results: [], total: 0 };
             }
@@ -364,12 +421,160 @@ Resposta: {"message":"Verificando status operacional de todos os subsistemas... 
      */
     static getSuggestions(): string[] {
         return [
-            "Baixar Vingadores dublado",
-            "Quero uma série de comédia",
+            "Me indica um filme para hoje à noite",
+            "Cria uma lista de filmes dublados para a família",
+            "Quero uma série leve para maratonar",
             "Status do sistema",
             "Canais de esportes",
-            "Filmes 4K lançamentos",
             "Recomenda algo parecido com Matrix"
         ];
+    }
+
+    private static detectDirectIntent(message: string): DirectIntent {
+        const normalized = message.toLowerCase().trim();
+
+        if (/status do sistema|como esta o sistema|como está o sistema|saude do sistema|saúde do sistema/.test(normalized)) {
+            return { type: 'status', query: '' };
+        }
+
+        if (/canal|tv ao vivo|iptv|esporte ao vivo/.test(normalized)) {
+            return { type: 'iptv', query: message };
+        }
+
+        if (/baixar|torrent|magnet|quero ver|quero assistir|assistir agora|abrir/.test(normalized)) {
+            return { type: 'torrent', query: this.extractRecommendationSubject(message) };
+        }
+
+        if (/me indica|recomenda|sugere|o que assistir|surpreenda|cria uma lista|monte uma lista|lista de/.test(normalized)) {
+            return { type: 'recommend', query: this.extractRecommendationSubject(message) };
+        }
+
+        if (/buscar|procura|encontra/.test(normalized)) {
+            return { type: 'search', query: this.extractRecommendationSubject(message) };
+        }
+
+        return null;
+    }
+
+    private static async executeDirectIntent(userMessage: string, intent: NonNullable<DirectIntent>): Promise<ChatResponse> {
+        if (intent.type === 'torrent') {
+            return {
+                message: `Entendido. Vou abrir a rede profunda do Nexus e trazer fontes reais para "${intent.query}" com prioridade PT-BR. ⚡`,
+                action: { type: 'torrent', data: await this.searchTorrents(intent.query) }
+            };
+        }
+
+        if (intent.type === 'status') {
+            return {
+                message: 'Verificando o estado operacional do Orion, Arconte e Nexus agora. ⚡',
+                action: { type: 'status', data: await this.getSystemStatus() }
+            };
+        }
+
+        if (intent.type === 'iptv') {
+            return {
+                message: `Estou vasculhando os canais ao vivo mais próximos do que você pediu: "${intent.query}". 📺`,
+                action: { type: 'iptv', data: await this.getIPTVChannels(intent.query) }
+            };
+        }
+
+        if (intent.type === 'recommend') {
+            const recommendationData = await this.getRecommendations(intent.query);
+            return {
+                message: this.buildRecommendationMessage(userMessage, recommendationData),
+                action: { type: 'recommend', data: recommendationData }
+            };
+        }
+
+        return {
+            message: `Buscando agora por "${intent.query}" no catálogo e nos metadados reais do sistema. 🧠`,
+            action: { type: 'search', data: await this.searchContent(intent.query) }
+        };
+    }
+
+    private static extractRecommendationSubject(message: string) {
+        return String(message || '')
+            .replace(/^(me indica|recomenda|sugere|cria uma lista|monte uma lista|lista de|quero ver|quero assistir|assistir agora|buscar|procura|encontra)\s+/i, '')
+            .trim() || message.trim();
+    }
+
+    private static isGenericRecommendationQuery(query: string) {
+        const normalized = query.toLowerCase();
+        return (
+            normalized.length < 4 ||
+            /familia|família|dublado|leve|maratonar|maratona|filme da noite|hoje a noite|hoje à noite|acao|ação|comedia|comédia|terror|anime|surpreenda/.test(normalized)
+        );
+    }
+
+    private static async getCatalogRecommendations(query: string) {
+        const normalized = String(query || '').toLowerCase();
+        const catalog = await prisma.video.findMany({
+            where: {
+                status: { in: ['READY', 'CATALOG', 'NEXUS', 'REMOTE'] }
+            },
+            orderBy: [
+                { hasDubbed: 'desc' },
+                { hasPortuguese: 'desc' },
+                { createdAt: 'desc' }
+            ],
+            take: 30
+        });
+
+        const filtered = catalog.filter((video: any) => {
+            if (!normalized) return true;
+            const haystack = `${video.title || ''} ${video.description || ''} ${video.tags || ''} ${video.category || ''}`.toLowerCase();
+            if (/familia|família/.test(normalized)) {
+                return /familia|família|kids|infantil|anim/.test(haystack);
+            }
+            if (/dublado|pt-br|portugues|português/.test(normalized)) {
+                return Boolean(video.hasDubbed || video.hasPortuguese || /dublado|pt-br|dual audio/.test(haystack));
+            }
+            if (/filme/.test(normalized)) {
+                return !/series|temporada|s\d{2}e\d{2}/i.test(haystack);
+            }
+            return haystack.includes(normalized);
+        });
+
+        const boosted = (filtered.length > 0 ? filtered : catalog)
+            .sort((a: any, b: any) => {
+                const aPt = (a.hasDubbed ? 30 : 0) + (a.hasPortuguese ? 15 : 0);
+                const bPt = (b.hasDubbed ? 30 : 0) + (b.hasPortuguese ? 15 : 0);
+                return bPt - aPt;
+            })
+            .slice(0, 12)
+            .map((video: any) => ({
+                id: video.id,
+                title: video.title,
+                name: video.title,
+                overview: video.description,
+                poster_path: video.thumbnailPath,
+                backdrop_path: video.thumbnailPath,
+                vote_average: null,
+                media_type: /series|temporada|s\d{2}e\d{2}/i.test(`${video.category || ''} ${video.tags || ''} ${video.title || ''}`) ? 'tv' : 'movie',
+                status: video.status,
+                source: 'catalog',
+                hasDubbed: video.hasDubbed,
+                hasPortuguese: video.hasPortuguese,
+            }));
+
+        return {
+            results: boosted,
+            total: boosted.length,
+            basedOn: boosted.length ? 'catálogo real do Orion' : 'sem resultados locais',
+            tip: boosted.length ? '📚 Posso refinar por dublado, família, ação, anime ou filme da noite.' : undefined
+        };
+    }
+
+    private static buildRecommendationMessage(userMessage: string, recommendationData: any) {
+        const count = recommendationData?.results?.length || 0;
+        if (count === 0) {
+            return `Ainda não achei uma seleção boa para "${userMessage}", mas posso tentar por clima, gênero ou idioma para encontrar algo melhor.`;
+        }
+
+        if (recommendationData?.basedOn === 'catálogo real do Orion') {
+            return `Separei ${count} opções reais do seu catálogo para você não precisar adivinhar o que assistir. 🎬`;
+        }
+
+        return `Montei ${count} sugestões reais para "${userMessage}", misturando o que já faz sentido no sistema com tendências atuais. 🧠`;
     }
 }

@@ -41,7 +41,7 @@ export function TorrentSearch() {
     const [searchMode, setSearchMode] = useState<'semantic' | 'ultra' | 'extended' | 'advanced' | 'ptbr'>('semantic');
     const [ptbrOnly, setPtbrOnly] = useState(false);
     const [selectedForDownload, setSelectedForDownload] = useState<TorrentResult | null>(null);
-    const [torrentPreviews, setTorrentPreviews] = useState<Map<string, TorrentPreview>>(new Map());
+    const [torrentPreviews, setTorrentPreviews] = useState<Map<string, any>>(new Map());
     const [loadingPreview, setLoadingPreview] = useState<string | null>(null);
     const navigate = useNavigate();
     const location = useLocation();
@@ -77,19 +77,25 @@ export function TorrentSearch() {
     };
 
     const getTorrentPreview = async (magnetLink: string) => {
-        if (torrentPreviews.has(magnetLink)) return torrentPreviews.get(magnetLink);
+        const cached = torrentPreviews.get(magnetLink);
+        if (cached) return cached;
 
         setLoadingPreview(magnetLink);
         try {
             const res = await fetch(`${GATEWAY_URL}/api/torrent/add`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ magnetURI: magnetLink })
+                body: JSON.stringify({ magnetURI: magnetLink, preview: true })
             });
 
-            if (!res.ok) throw new Error('Falha ao carregar preview');
-
             const data = await res.json();
+            if (res.status === 202 || data?.pending) {
+                setTorrentPreviews(prev => new Map(prev).set(magnetLink, 'pending'));
+                return 'pending';
+            }
+
+            if (!res.ok) throw new Error(data?.error || 'Falha ao carregar preview');
+
             const files = data.files || [];
 
             const audioFiles = files.filter((f: any) => f.name.match(/\.(mp3|aac|ac3|dts|flac|ogg|opus|m4a)$/i));
@@ -118,8 +124,8 @@ export function TorrentSearch() {
             return preview;
         } catch (error) {
             console.error('Preview error:', error);
-            // Opcional: mostrar erro para o usuário
-            return null;
+            setTorrentPreviews(prev => new Map(prev).set(magnetLink, 'failed'));
+            return 'failed';
         } finally {
             setLoadingPreview(null);
         }
@@ -320,7 +326,11 @@ export function TorrentSearch() {
                                 <h3 className="text-2xl font-black italic uppercase text-white">Resultados <span className="text-white/20">({results.length})</span></h3>
                             </div>
 
-                            {results.map((result, index) => (
+                            {results.map((result, index) => {
+                                const previewState = torrentPreviews.get(result.magnetLink);
+                                const previewDetails = typeof previewState === 'object' ? previewState : null;
+
+                                return (
                                 <motion.div
                                     key={index}
                                     initial={{ opacity: 0, y: 20 }}
@@ -346,7 +356,6 @@ export function TorrentSearch() {
                                                 )}
                                                 <button
                                                     onClick={() => getTorrentPreview(result.magnetLink)}
-                                                    onMouseEnter={() => getTorrentPreview(result.magnetLink)}
                                                     className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-cyan-500/20 text-cyan-300 border border-cyan-500/20 hover:bg-cyan-500/30 transition-colors flex items-center gap-1"
                                                 >
                                                     {loadingPreview === result.magnetLink ? (
@@ -354,19 +363,29 @@ export function TorrentSearch() {
                                                     ) : (
                                                         <Info size={10} />
                                                     )}
-                                                    INFO
+                                                    {previewState === 'pending' ? 'AGUARDANDO' : 'INFO'}
                                                 </button>
-                                                {torrentPreviews.get(result.magnetLink)?.hasMultipleAudio && (
+                                                {previewState === 'pending' && (
+                                                    <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-amber-500/20 text-amber-300 border border-amber-500/20">
+                                                        Metadata pendente
+                                                    </span>
+                                                )}
+                                                {previewState === 'failed' && (
+                                                    <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-red-500/20 text-red-300 border border-red-500/20">
+                                                        Preview indisponivel
+                                                    </span>
+                                                )}
+                                                {previewDetails?.hasMultipleAudio && (
                                                     <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-green-500/20 text-green-300 border border-green-500/20 flex items-center gap-1">
                                                         <Music size={10} /> {torrentPreviews.get(result.magnetLink)?.audioFiles} ÁUDIOS
                                                     </span>
                                                 )}
-                                                {torrentPreviews.get(result.magnetLink)?.hasSubtitles && (
+                                                {typeof torrentPreviews.get(result.magnetLink) === 'object' && torrentPreviews.get(result.magnetLink)?.hasSubtitles && (
                                                     <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-blue-500/20 text-blue-300 border border-blue-500/20 flex items-center gap-1">
                                                         <FileText size={10} /> {torrentPreviews.get(result.magnetLink)?.subtitleFiles} LEGENDAS
                                                     </span>
                                                 )}
-                                                {torrentPreviews.get(result.magnetLink)?.languages.map(lang => (
+                                                {typeof torrentPreviews.get(result.magnetLink) === 'object' && torrentPreviews.get(result.magnetLink)?.languages.map((lang: string) => (
                                                     <span key={lang} className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-purple-500/20 text-purple-300 border border-purple-500/20">
                                                         {lang}
                                                     </span>
@@ -414,7 +433,8 @@ export function TorrentSearch() {
                                         </div>
                                     </div>
                                 </motion.div>
-                            ))}
+                                );
+                            })}
                         </motion.div>
                     )}
                 </AnimatePresence>

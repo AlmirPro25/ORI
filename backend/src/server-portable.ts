@@ -9,6 +9,7 @@ import ffmpeg from 'fluent-ffmpeg';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 import jwt from 'jsonwebtoken';
+import axios from 'axios';
 
 import { Server } from 'socket.io';
 import http from 'http';
@@ -26,6 +27,8 @@ import seriesRoutes from './routes/series-routes';
 import mediaInfoRoutes from './routes/media-info-routes';
 import { addonRoutes } from './routes/addon.routes';
 import aiChatRoutes from './ai-chat-routes';
+import { materializeVideo } from './workers/media-worker';
+import { AddonService } from './services/addon.service';
 
 import { governanceRoutes, healthRoutes, searchRoutes, createAuthRoutes } from './modules';
 import { SystemTelemetry } from './services/system-telemetry';
@@ -130,12 +133,910 @@ if (!process.env.JWT_SECRET) {
 }
 const JWT_SECRET = process.env.JWT_SECRET || require('crypto').randomBytes(32).toString('hex');
 
+function inferCategory(rawCategory?: string, tags?: string[] | string, title?: string) {
+    const tagList = Array.isArray(tags)
+        ? tags.map(t => String(t).toLowerCase())
+        : String(tags || '').split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
+    const normalized = String(rawCategory || '').toLowerCase();
+    const source = `${normalized} ${tagList.join(' ')} ${String(title || '').toLowerCase()}`;
+
+    if (source.includes('series') || source.includes('tv') || source.includes('temporada') || source.includes('season')) {
+        return 'Series';
+    }
+
+    if (source.includes('movie') || source.includes('filme') || source.includes('movies')) {
+        return 'Movies';
+    }
+
+    return rawCategory || 'Geral';
+}
+
+function inferLanguage(rawLanguage?: string, tags?: string[] | string, title?: string) {
+    const haystack = `${rawLanguage || ''} ${Array.isArray(tags) ? tags.join(' ') : tags || ''} ${title || ''}`.toLowerCase();
+    if (haystack.includes('pt-br') || haystack.includes('dublado') || haystack.includes('dual audio')) return 'pt-BR';
+    if (haystack.includes('legendado')) return 'pt-BR-sub';
+    return rawLanguage || 'und';
+}
+
+function inferQuality(rawQuality?: string, title?: string) {
+    const haystack = `${rawQuality || ''} ${title || ''}`.toLowerCase();
+    if (haystack.includes('2160') || haystack.includes('4k') || haystack.includes('uhd')) return '2160p';
+    if (haystack.includes('1080')) return '1080p';
+    if (haystack.includes('720')) return '720p';
+    if (haystack.includes('480')) return '480p';
+    return rawQuality || '1080p';
+}
+
+function extractMagnetInfoHash(magnet?: string) {
+    const match = magnet?.match(/btih:([a-zA-Z0-9]+)/i);
+    return match ? match[1].toLowerCase() : null;
+}
+
+function buildBasicMagnet(infoHash?: string | null) {
+    const normalized = String(infoHash || '').trim().toLowerCase();
+    if (!normalized) return null;
+    return `magnet:?xt=urn:btih:${normalized}`;
+}
+
+async function resolveMovieMaterializationSource(video: any) {
+    const normalize = (value?: string | null) => String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+    const titleHint = `${video.title || ''} ${video.originalTitle || ''} ${video.description || ''} ${video.tags || ''}`.trim();
+    const prefersPortuguese = /(dublado|dual audio|legendado|pt-br|portugues|familia|filme|acao|drama|comedia|terror|aventura)/i.test(titleHint);
+    const buildCandidate = (params: {
+        magnetURI: string;
+        sourceSite: string;
+        quality?: string | null;
+        language?: string | null;
+        seeds?: number | null;
+        title?: string | null;
+    }) => ({
+        magnetURI: params.magnetURI,
+        sourceSite: params.sourceSite,
+        quality: params.quality || null,
+        language: params.language || 'und',
+        seeds: Number(params.seeds || 0),
+        title: params.title || '',
+    });
+    const scoreCandidate = (candidate: {
+        sourceSite: string;
+        quality?: string | null;
+        language?: string | null;
+        seeds?: number;
+        title?: string;
+    }) => {
+        const sourceName = normalize(candidate.sourceSite);
+        const title = String(candidate.title || '');
+        const quality = String(candidate.quality || '').toLowerCase();
+        const language = String(candidate.language || '').toLowerCase();
+        const portugueseTitle = /(dublado|dual audio|pt-br|portuguese|portugues|latino|multi audio)/i.test(title);
+        const subtitledTitle = /(legendado|sub)/i.test(title);
+        const addonBoost = sourceName.includes('brazuca') ? 40
+            : sourceName.includes('torrentio') ? 26
+                : sourceName.includes('thepiratebay') ? 14
+                    : sourceName.includes('nexus') ? 10
+                        : 0;
+        const qualityBoost = quality.includes('2160') || quality.includes('4k') ? 14
+            : quality.includes('1080') ? 10
+                : quality.includes('720') ? 6
+                    : 2;
+        const portugueseBoost = prefersPortuguese
+            ? (language === 'pt-br' || portugueseTitle ? 55 : language === 'pt-br-sub' || subtitledTitle ? 26 : 0)
+            : (language === 'pt-br' || portugueseTitle ? 20 : 0);
+
+        return addonBoost + qualityBoost + portugueseBoost + Math.min(40, Number(candidate.seeds || 0));
+    };
+    const existingMagnet = video.hlsPath?.startsWith('magnet:')
+        ? video.hlsPath
+        : video.storageKey?.startsWith('magnet:')
+            ? video.storageKey
+            : null;
+
+    if (existingMagnet) {
+        return {
+            magnetURI: existingMagnet,
+            sourceSite: 'catalog',
+            quality: video.quality || null,
+            language: video.hasDubbed ? 'pt-BR' : video.hasPortuguese ? 'pt-BR-sub' : 'und',
+        };
+    }
+
+    const candidates: Array<{
+        magnetURI: string;
+        sourceSite: string;
+        quality?: string | null;
+        language?: string | null;
+        seeds?: number;
+        title?: string;
+    }> = [];
+
+    const addonLookupId = video.imdbId || video.tmdbId || null;
+    if (addonLookupId) {
+        try {
+            const streams = await AddonService.getStreamsFromAllAddons('movie', String(addonLookupId), {
+                title: titleHint,
+            });
+
+            streams
+                .filter((candidate: any) => candidate?.url?.startsWith('magnet:') || candidate?.infoHash)
+                .slice(0, 12)
+                .forEach((stream: any) => {
+                    const magnetURI = stream.url?.startsWith('magnet:') ? stream.url : buildBasicMagnet(stream.infoHash);
+                    if (!magnetURI) return;
+
+                    candidates.push(buildCandidate({
+                        magnetURI,
+                        sourceSite: stream.addonName || 'addon',
+                        quality: /2160|4k/i.test(stream.title || '') ? '2160p' : /1080/i.test(stream.title || '') ? '1080p' : /720/i.test(stream.title || '') ? '720p' : video.quality || '1080p',
+                        language: /dublado|dual audio|pt-br|multi audio|latino/i.test(stream.title || '') ? 'pt-BR' : /legendado|sub/i.test(stream.title || '') ? 'pt-BR-sub' : 'und',
+                        seeds: (() => {
+                            const matches = [...String(stream.title || '').matchAll(/(?:peer(?:s)?|seed(?:s|ers?)?|👤)[^\d]{0,6}(\d{1,5})/gi)];
+                            return matches.reduce((best, match) => Math.max(best, Number(match[1] || 0)), 0);
+                        })(),
+                        title: stream.title || stream.name || '',
+                    }));
+                });
+        } catch (error: any) {
+            console.warn(`⚠️ [Play] Addon lookup falhou para ${video.title}: ${error?.message || error}`);
+        }
+    }
+
+    const searchTerms = [video.title, video.originalTitle].filter(Boolean);
+    for (const query of searchTerms) {
+        try {
+            const nexusResponse = await axios.post('http://localhost:3005/api/search/ultra', {
+                query,
+                category: 'Movies',
+                limit: 8,
+            }, { timeout: 20000 });
+
+            const nexusCandidates = (nexusResponse.data?.results || [])
+                .filter((item: any) => item?.magnetLink)
+                .sort((a: any, b: any) => {
+                    const aPt = /dublado|dual audio|pt-br/i.test(a.title || '') ? 25 : 0;
+                    const bPt = /dublado|dual audio|pt-br/i.test(b.title || '') ? 25 : 0;
+                    return ((b.seeds || 0) + bPt) - ((a.seeds || 0) + aPt);
+                })
+                .slice(0, 8);
+
+            nexusCandidates.forEach((candidate: any) => {
+                candidates.push(buildCandidate({
+                    magnetURI: candidate.magnetLink,
+                    sourceSite: candidate.sourceSite || candidate.provider || 'Nexus',
+                    quality: /2160|4k/i.test(candidate.title || '') ? '2160p' : /1080/i.test(candidate.title || '') ? '1080p' : /720/i.test(candidate.title || '') ? '720p' : video.quality || '1080p',
+                    language: /dublado|dual audio|pt-br|multi audio|latino/i.test(candidate.title || '') ? 'pt-BR' : /legendado|sub/i.test(candidate.title || '') ? 'pt-BR-sub' : 'und',
+                    seeds: Number(candidate.seeds || 0),
+                    title: candidate.title || '',
+                }));
+            });
+        } catch (error: any) {
+            console.warn(`⚠️ [Play] Nexus lookup falhou para ${query}: ${error?.message || error}`);
+        }
+    }
+
+    const seen = new Set<string>();
+    const ranked = candidates
+        .filter((candidate) => {
+            const key = extractMagnetInfoHash(candidate.magnetURI) || candidate.magnetURI;
+            if (!key || seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        })
+        .sort((a, b) => scoreCandidate(b) - scoreCandidate(a));
+
+    if (ranked[0]) {
+        return ranked[0];
+    }
+
+    return null;
+}
+
+function splitTags(tags?: string | string[] | null) {
+    if (Array.isArray(tags)) {
+        return tags.map(tag => String(tag).trim()).filter(Boolean);
+    }
+
+    return String(tags || '')
+        .split(',')
+        .map(tag => tag.trim())
+        .filter(Boolean);
+}
+
+function normalizeText(value?: string | null) {
+    return String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+}
+
+function detectPortugueseAffinity(input: { title?: string | null; description?: string | null; tags?: string[] | string | null; category?: string | null; hasDubbed?: boolean; hasPortuguese?: boolean; hasPortugueseAudio?: boolean; hasPortugueseSubs?: boolean; }) {
+    const tagList = splitTags(input.tags);
+    const haystack = normalizeText([
+        input.title,
+        input.description,
+        input.category,
+        ...tagList,
+    ].join(' '));
+
+    const dubbed = !!input.hasDubbed || !!input.hasPortugueseAudio || /\bdublado\b|\bdual audio\b|\bpt-br\b|\bportugues\b|\bportuguese\b/.test(haystack);
+    const subtitled = !!input.hasPortugueseSubs || /\blegendado\b|\blegendas\b/.test(haystack);
+    const portuguese = dubbed || subtitled || !!input.hasPortuguese;
+
+    return {
+        dubbed,
+        subtitled,
+        portuguese,
+        score: dubbed ? 45 : portuguese ? 20 : 0,
+    };
+}
+
+function detectFamilyAffinity(input: { title?: string | null; description?: string | null; tags?: string[] | string | null; category?: string | null; }) {
+    const haystack = normalizeText([
+        input.title,
+        input.description,
+        input.category,
+        ...splitTags(input.tags),
+    ].join(' '));
+
+    const family = /\bfamily\b|\bfamilia\b|\binfantil\b|\bkids\b|\bcriancas\b|\banimacao\b|\banime\b|\baventura\b|\bcomedia\b|\bcomedy\b|\bdisney\b|\bpixar\b/.test(haystack);
+    return {
+        family,
+        score: family ? 18 : 0,
+    };
+}
+
+function detectKidsAffinity(input: { title?: string | null; description?: string | null; tags?: string[] | string | null; category?: string | null; }) {
+    const haystack = normalizeText([
+        input.title,
+        input.description,
+        input.category,
+        ...splitTags(input.tags),
+    ].join(' '));
+
+    const kids = /\binfantil\b|\bkids\b|\bcriancas\b|\bcrianca\b|\bdisney\b|\bpixar\b|\bpatrulha canina\b|\bpeppa\b|\bgalinha pintadinha\b|\banimacao\b/.test(haystack);
+    return {
+        kids,
+        score: kids ? 24 : 0,
+    };
+}
+
+function detectAdultAffinity(input: { title?: string | null; description?: string | null; tags?: string[] | string | null; category?: string | null; }) {
+    const haystack = normalizeText([
+        input.title,
+        input.description,
+        input.category,
+        ...splitTags(input.tags),
+    ].join(' '));
+
+    const adult = /\bterror\b|\bhorror\b|\bthriller\b|\bsuspense\b|\bcrime\b|\bviolencia\b|\bviolent\b|\berotico\b|\badult\b|\bguerra\b|\bwar\b/.test(haystack);
+    return {
+        adult,
+        score: adult ? 14 : 0,
+    };
+}
+
+function getWeightedBoost(pool: Record<string, number> | undefined, values: string[] = [], cap = 24, multiplier = 6) {
+    if (!pool) return 0;
+    const total = values.reduce((sum, value) => sum + Number(pool[normalizeText(value)] || 0), 0);
+    return Math.min(cap, total * multiplier);
+}
+
+function dedupeByTitle(items: any[]) {
+    const seen = new Set<string>();
+    return items.filter((item) => {
+        const key = normalizeText(item.title);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+
+function diversifyItems(items: any[], limit = 18) {
+    const selected: any[] = [];
+    const categoryCount = new Map<string, number>();
+
+    for (const item of items) {
+        if (selected.length >= limit) break;
+
+        const category = normalizeText(item.category || item.kind || 'geral');
+        const titleKey = normalizeText(item.title);
+        const currentCount = categoryCount.get(category) || 0;
+        const alreadyHasTitle = selected.some((candidate) => normalizeText(candidate.title) === titleKey);
+
+        if (alreadyHasTitle) continue;
+        if (currentCount >= 4 && items.length > limit) continue;
+
+        selected.push(item);
+        categoryCount.set(category, currentCount + 1);
+    }
+
+    return selected;
+}
+
+function dubbedFirstChoice(items: any[]) {
+    return items.find((item) => item.isDubbed && item.status === 'READY')
+        || items.find((item) => item.isDubbed)
+        || items.find((item) => item.isPortuguese && item.status === 'READY')
+        || items.find((item) => item.isPortuguese);
+}
+
+function detectSessionFit(item: any) {
+    const durationMinutes = Number(item.durationMinutes || 0) || null;
+    const episodeReadyCount = Number(item.readyEpisodes || item.views || 0);
+    const isSeries = item.kind === 'series';
+    const isQuick = isSeries ? episodeReadyCount > 0 && episodeReadyCount <= 6 : (durationMinutes !== null ? durationMinutes <= 120 : false);
+    const isMarathon = isSeries ? episodeReadyCount >= 8 : (durationMinutes !== null ? durationMinutes >= 130 : false);
+
+    return {
+        quick: isQuick,
+        marathon: isMarathon,
+    };
+}
+
+function getDayMoment() {
+    const hour = Number(new Intl.DateTimeFormat('en-US', {
+        hour: 'numeric',
+        hour12: false,
+        timeZone: 'America/Sao_Paulo',
+    }).format(new Date()));
+
+    if (hour < 6) return 'late-night';
+    if (hour < 12) return 'morning';
+    if (hour < 18) return 'afternoon';
+    if (hour < 23) return 'evening';
+    return 'late-night';
+}
+
+function getVideoDiscoveryScore(video: any, context: {
+    preferredCategories?: string[];
+    preferredTags?: string[];
+    preferredCategoryWeights?: Record<string, number>;
+    preferredTagWeights?: Record<string, number>;
+    favoriteVideoIds?: string[];
+    recentVideoIds?: string[];
+    completedVideoIds?: string[];
+    abandonedVideoIds?: string[];
+    audienceProfile?: string;
+} = {}) {
+    const statusWeight = video.status === 'READY' ? 45 : video.status === 'CATALOG' ? 35 : video.status === 'NEXUS' ? 25 : 10;
+    const freshnessHours = Math.max(1, (Date.now() - new Date(video.createdAt).getTime()) / (1000 * 60 * 60));
+    const freshness = Math.max(0, 36 - Math.min(36, freshnessHours / 6));
+    const popularity = Math.min(40, Number(video.views || 0) * 2);
+    const portuguese = detectPortugueseAffinity(video);
+    const family = detectFamilyAffinity(video);
+    const kids = detectKidsAffinity(video);
+    const adult = detectAdultAffinity(video);
+    const category = inferCategory(video.category, video.tags, video.title);
+    const normalizedTags = splitTags(video.tags).map(normalizeText);
+    const preferredCategoryBoost = (context.preferredCategories || []).some((item) => normalizeText(item) === normalizeText(category)) ? 20 : 0;
+    const preferredTagBoost = normalizedTags.some((tag) => (context.preferredTags || []).includes(tag)) ? 12 : 0;
+    const metadataBonus = video.thumbnailPath ? 10 : 0;
+    const weightedCategoryBoost = getWeightedBoost(context.preferredCategoryWeights, [category], 28, 8);
+    const weightedTagBoost = getWeightedBoost(context.preferredTagWeights, normalizedTags, 24, 4);
+    const favoriteBoost = (context.favoriteVideoIds || []).includes(video.id) ? 18 : 0;
+    const repeatPenalty = (context.recentVideoIds || []).includes(video.id) ? 22 : 0;
+    const completionBoost = (context.completedVideoIds || []).includes(video.id) ? 16 : 0;
+    const abandonPenalty = (context.abandonedVideoIds || []).includes(video.id) ? 28 : 0;
+    const readinessBonus = video.status === 'READY' && portuguese.portuguese ? 14 : 0;
+    const profileBoost =
+        context.audienceProfile === 'kids' ? (kids.score * 2 + family.score + (adult.adult ? -40 : 0)) :
+            context.audienceProfile === 'family' ? (family.score * 2 + portuguese.score + (adult.adult ? -20 : 0)) :
+                context.audienceProfile === 'adult' ? (adult.score * 2 + (kids.kids ? -24 : 0)) :
+                    0;
+
+    return statusWeight + freshness + popularity + portuguese.score + family.score + kids.score + preferredCategoryBoost + preferredTagBoost + weightedCategoryBoost + weightedTagBoost + favoriteBoost + completionBoost + readinessBonus + metadataBonus + profileBoost - repeatPenalty - abandonPenalty;
+}
+
+function getSeriesDiscoveryScore(series: any, context: {
+    preferredCategories?: string[];
+    preferredTags?: string[];
+    preferredCategoryWeights?: Record<string, number>;
+    preferredTagWeights?: Record<string, number>;
+    audienceProfile?: string;
+} = {}) {
+    const freshnessHours = Math.max(1, (Date.now() - new Date(series.updatedAt || series.createdAt).getTime()) / (1000 * 60 * 60));
+    const freshness = Math.max(0, 32 - Math.min(32, freshnessHours / 8));
+    const progress = Math.min(35, Number(series.progress || 0) / 2);
+    const completeness = Math.min(25, Number(series.readyEpisodes || 0) * 2);
+    const portuguese = detectPortugueseAffinity({
+        title: series.title,
+        description: series.overview,
+        tags: series.genres,
+        category: 'Series',
+    });
+    const family = detectFamilyAffinity({
+        title: series.title,
+        description: series.overview,
+        tags: series.genres,
+        category: 'Series',
+    });
+    const kids = detectKidsAffinity({
+        title: series.title,
+        description: series.overview,
+        tags: series.genres,
+        category: 'Series',
+    });
+    const adult = detectAdultAffinity({
+        title: series.title,
+        description: series.overview,
+        tags: series.genres,
+        category: 'Series',
+    });
+    const preferredCategoryBoost = (context.preferredCategories || []).some((item) => normalizeText(item) === 'series') ? 20 : 0;
+    const normalizedGenres = splitTags(series.genres).map(normalizeText);
+    const preferredTagBoost = normalizedGenres.some((tag) => (context.preferredTags || []).includes(tag)) ? 12 : 0;
+    const metadataBonus = series.poster || series.backdrop ? 15 : 0;
+    const weightedCategoryBoost = getWeightedBoost(context.preferredCategoryWeights, ['Series'], 28, 8);
+    const weightedTagBoost = getWeightedBoost(context.preferredTagWeights, normalizedGenres, 24, 4);
+    const profileBoost =
+        context.audienceProfile === 'kids' ? (kids.score * 2 + family.score + (adult.adult ? -40 : 0)) :
+            context.audienceProfile === 'family' ? (family.score * 2 + portuguese.score + (adult.adult ? -20 : 0)) :
+                context.audienceProfile === 'adult' ? (adult.score * 2 + (kids.kids ? -24 : 0)) :
+                    0;
+
+    return freshness + progress + completeness + portuguese.score + family.score + kids.score + preferredCategoryBoost + preferredTagBoost + weightedCategoryBoost + weightedTagBoost + metadataBonus + profileBoost;
+}
+
+function toDiscoveryVideoItem(video: any, score: number) {
+    const portuguese = detectPortugueseAffinity(video);
+    const kids = detectKidsAffinity(video);
+    const family = detectFamilyAffinity(video);
+    const adult = detectAdultAffinity(video);
+    return {
+        kind: 'video',
+        id: video.id,
+        title: video.title,
+        subtitle: video.description || 'Filme pronto para entrar na sua próxima sessão em família.',
+        image: video.thumbnailPath,
+        backdrop: video.thumbnailPath,
+        href: `/videos/${video.id}`,
+        badge: portuguese.dubbed ? 'Dublado' : portuguese.subtitled ? 'Legendado PT-BR' : (video.status || 'Nexus'),
+        score,
+        status: video.status,
+        category: inferCategory(video.category, video.tags, video.title),
+        quality: inferQuality(video.quality, video.title),
+        durationMinutes: video.duration ? Math.round(Number(video.duration) / 60) : null,
+        views: Number(video.views || 0),
+        isPortuguese: portuguese.portuguese,
+        isDubbed: portuguese.dubbed,
+        isKidsSafe: kids.kids,
+        isFamilySafe: family.family || kids.kids,
+        isAdult: adult.adult,
+        safetyLabel: kids.kids ? 'kids-safe' : family.family ? 'family-safe' : adult.adult ? 'adult' : 'general',
+        tags: splitTags(video.tags),
+        createdAt: video.createdAt,
+    };
+}
+
+function toDiscoverySeriesItem(series: any, score: number) {
+    const portuguese = detectPortugueseAffinity({
+        title: series.title,
+        description: series.overview,
+        tags: series.genres,
+        category: 'Series',
+    });
+    const kids = detectKidsAffinity({
+        title: series.title,
+        description: series.overview,
+        tags: series.genres,
+        category: 'Series',
+    });
+    const family = detectFamilyAffinity({
+        title: series.title,
+        description: series.overview,
+        tags: series.genres,
+        category: 'Series',
+    });
+    const adult = detectAdultAffinity({
+        title: series.title,
+        description: series.overview,
+        tags: series.genres,
+        category: 'Series',
+    });
+    return {
+        kind: 'series',
+        id: series.id,
+        title: series.title,
+        subtitle: series.overview || 'Série organizada por temporada e pronta para maratona.',
+        image: series.poster || series.backdrop,
+        backdrop: series.backdrop || series.poster,
+        href: `/series/${series.id}`,
+        badge: portuguese.dubbed ? 'Série em português' : `${series.totalSeasons || 0} temporadas`,
+        score,
+        status: series.status,
+        category: 'Series',
+        quality: `${series.totalEpisodes || 0} episódios`,
+        readyEpisodes: Number(series.readyEpisodes || 0),
+        views: Number(series.readyEpisodes || 0),
+        isPortuguese: portuguese.portuguese,
+        isDubbed: portuguese.dubbed,
+        isKidsSafe: kids.kids,
+        isFamilySafe: family.family || kids.kids,
+        isAdult: adult.adult,
+        safetyLabel: kids.kids ? 'kids-safe' : family.family ? 'family-safe' : adult.adult ? 'adult' : 'general',
+        tags: splitTags(series.genres),
+        createdAt: series.updatedAt || series.createdAt,
+    };
+}
+
+function chooseFeaturedItem(items: any[], context: {
+    dayMoment: string;
+    familyHeavy?: boolean;
+    adultHeavy?: boolean;
+    audienceProfile?: string;
+}) {
+    const readyItems = items.filter((item) => item.status === 'READY');
+    const source = readyItems.length > 0 ? readyItems : items;
+
+    if (context.audienceProfile === 'kids') {
+        return source.find((item) => item.isPortuguese && detectKidsAffinity(item).kids)
+            || source.find((item) => detectKidsAffinity(item).kids)
+            || source.find((item) => item.isPortuguese && detectFamilyAffinity(item).family);
+    }
+
+    if (context.audienceProfile === 'family') {
+        return source.find((item) => item.isPortuguese && detectFamilyAffinity(item).family)
+            || source.find((item) => detectFamilyAffinity(item).family)
+            || source.find((item) => item.isPortuguese);
+    }
+
+    if (context.audienceProfile === 'adult') {
+        return source.find((item) => detectAdultAffinity(item).adult && item.isPortuguese)
+            || source.find((item) => detectAdultAffinity(item).adult)
+            || source.find((item) => item.kind === 'video');
+    }
+
+    if (context.dayMoment === 'morning' || context.dayMoment === 'afternoon') {
+        return source.find((item) => item.isPortuguese && detectFamilyAffinity(item).family)
+            || source.find((item) => detectSessionFit(item).quick && item.isPortuguese)
+            || source.find((item) => detectFamilyAffinity(item).family);
+    }
+
+    if (context.dayMoment === 'evening') {
+        return source.find((item) => item.kind === 'video' && item.isPortuguese)
+            || source.find((item) => item.kind === 'video')
+            || source.find((item) => item.kind === 'series' && item.isPortuguese);
+    }
+
+    if (context.dayMoment === 'late-night') {
+        return source.find((item) => context.adultHeavy && detectAdultAffinity(item).adult)
+            || source.find((item) => detectSessionFit(item).marathon)
+            || source.find((item) => item.kind === 'series');
+    }
+
+    if (context.familyHeavy) {
+        return source.find((item) => item.isPortuguese && detectFamilyAffinity(item).family)
+            || source.find((item) => detectFamilyAffinity(item).family);
+    }
+
+    return dubbedFirstChoice(source) || source[0] || null;
+}
+
+function buildDiscoveryRows(items: any[], context: {
+    continueWatching?: any[];
+    preferredItems?: any[];
+    avgSessionTime?: number;
+    completionRate?: number;
+    dayMoment?: string;
+    familyHeavy?: boolean;
+    adultHeavy?: boolean;
+    audienceProfile?: string;
+} = {}) {
+    const videos = dedupeByTitle(items.filter(item => item.kind === 'video'));
+    const series = dedupeByTitle(items.filter(item => item.kind === 'series'));
+    const portugueseFirst = diversifyItems(items.filter(item => item.isPortuguese), 18);
+    const dubbedFirst = diversifyItems(items.filter(item => item.isDubbed), 18);
+    const kidsFirst = diversifyItems(items.filter((item) => detectKidsAffinity(item).kids).sort((a, b) => b.score - a.score), 18);
+    const familyFirst = diversifyItems(items.filter((item) => detectFamilyAffinity(item).family).sort((a, b) => b.score - a.score), 18);
+    const adultNight = diversifyItems(items.filter((item) => detectAdultAffinity(item).adult).sort((a, b) => b.score - a.score), 18);
+    const recent = diversifyItems([...items].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()), 18);
+    const trending = diversifyItems([...items].sort((a, b) => b.score - a.score), 18);
+    const continueWatching = dedupeByTitle(context.continueWatching || []).slice(0, 18);
+    const becauseYouLike = diversifyItems(context.preferredItems || [], 18);
+    const quickSession = diversifyItems(items.filter((item) => detectSessionFit(item).quick).sort((a, b) => b.score - a.score), 18);
+    const marathonMode = diversifyItems(items.filter((item) => detectSessionFit(item).marathon).sort((a, b) => b.score - a.score), 18);
+    const prefersMarathon = Number(context.avgSessionTime || 0) >= 3600 || Number(context.completionRate || 0) >= 0.65;
+    const prefersQuick = Number(context.avgSessionTime || 0) > 0 && Number(context.avgSessionTime || 0) < 2400;
+
+    const rows = [
+        {
+            id: 'continue-watching',
+            title: 'Continue de onde parou',
+            subtitle: 'Sessões recentes para voltar com um clique e sem procurar.',
+            items: continueWatching,
+        },
+        {
+            id: 'family-portuguese',
+            title: 'Em português para sua família',
+            subtitle: 'Onde o Orion deve insistir primeiro: dublado, PT-BR e fácil de apertar play.',
+            items: dubbedFirst.length > 0 ? dubbedFirst : portugueseFirst,
+        },
+        {
+            id: 'kids-safe',
+            title: 'Modo infantil',
+            subtitle: 'Uma faixa mais segura e simples para crianças.',
+            items: kidsFirst,
+        },
+        {
+            id: 'family-night',
+            title: 'Sessão tranquila para a casa toda',
+            subtitle: 'Títulos com mais cara de sofá, pipoca e play rápido.',
+            items: familyFirst,
+        },
+        {
+            id: 'light-now',
+            title: 'Hoje quero algo leve',
+            subtitle: 'Uma seleção de play fácil para não cansar a cabeça.',
+            items: quickSession.length > 0 ? quickSession : familyFirst,
+        },
+        {
+            id: 'because-you-like',
+            title: 'Porque combina com o que vocês assistem',
+            subtitle: 'O Orion puxando gêneros e sinais do seu próprio histórico.',
+            items: becauseYouLike,
+        },
+        {
+            id: 'quick-session',
+            title: 'Sessão curta, impacto rápido',
+            subtitle: 'Conteúdo mais leve para sessão curta e imediata.',
+            items: quickSession,
+        },
+        {
+            id: 'marathon-mode',
+            title: 'Maratona aberta',
+            subtitle: 'Quando a casa está com tempo para deixar rodando.',
+            items: marathonMode,
+        },
+        {
+            id: 'fresh-discoveries',
+            title: 'O que chegou e já merece atenção',
+            subtitle: 'Novidades do Arconte com capa, sinopse e potencial real de sessão.',
+            items: recent,
+        },
+        {
+            id: 'movie-night',
+            title: 'Filme da noite',
+            subtitle: 'Longas com mais cara de play imediato.',
+            items: videos.slice(0, 18),
+        },
+        {
+            id: 'series-marathon',
+            title: 'Séries para maratonar',
+            subtitle: 'Séries com mais episódios prontos e melhor apelo visual.',
+            items: series.slice(0, 18),
+        },
+        {
+            id: 'after-dark',
+            title: 'Depois que as crianças dormem',
+            subtitle: 'Catálogo mais adulto para o fim do dia.',
+            items: adultNight,
+        },
+        {
+            id: 'nexus-pulse',
+            title: 'Radar do Nexus',
+            subtitle: 'O mix mais forte do seu catálogo agora.',
+            items: trending,
+        },
+    ].filter(row => row.items.length > 0);
+
+    if (context.audienceProfile === 'kids') {
+        return rows
+            .filter((row) => row.id !== 'after-dark')
+            .sort((a, b) => {
+                const scoreA = a.id === 'kids-safe' || a.id === 'light-now' || a.id === 'family-portuguese' ? -3 : 0;
+                const scoreB = b.id === 'kids-safe' || b.id === 'light-now' || b.id === 'family-portuguese' ? -3 : 0;
+                return scoreA - scoreB;
+            });
+    }
+
+    if (context.audienceProfile === 'family' || (context.familyHeavy && !context.adultHeavy)) {
+        return rows.sort((a, b) => {
+            const scoreA = a.id === 'family-portuguese' || a.id === 'family-night' || a.id === 'light-now' ? -2 : 0;
+            const scoreB = b.id === 'family-portuguese' || b.id === 'family-night' || b.id === 'light-now' ? -2 : 0;
+            return scoreA - scoreB;
+        });
+    }
+
+    if (context.audienceProfile === 'adult' || context.adultHeavy) {
+        return rows.sort((a, b) => {
+            const scoreA = a.id === 'after-dark' ? -2 : a.id === 'family-night' ? 2 : 0;
+            const scoreB = b.id === 'after-dark' ? -2 : b.id === 'family-night' ? 2 : 0;
+            return scoreA - scoreB;
+        });
+    }
+
+    if (prefersMarathon) {
+        return rows.sort((a, b) => {
+            const scoreA = a.id === 'marathon-mode' ? -2 : a.id === 'quick-session' ? 2 : 0;
+            const scoreB = b.id === 'marathon-mode' ? -2 : b.id === 'quick-session' ? 2 : 0;
+            return scoreA - scoreB;
+        });
+    }
+
+    if (prefersQuick) {
+        return rows.sort((a, b) => {
+            const scoreA = a.id === 'quick-session' ? -2 : a.id === 'marathon-mode' ? 2 : 0;
+            const scoreB = b.id === 'quick-session' ? -2 : b.id === 'marathon-mode' ? 2 : 0;
+            return scoreA - scoreB;
+        });
+    }
+
+    return rows;
+}
+
+async function buildDiscoveryFeed(userId?: string, audienceProfile = 'house') {
+    const [videosRaw, seriesRaw, history, favorites, watchSessions, userProfile] = await Promise.all([
+        prisma.video.findMany({
+            where: { status: { in: ['READY', 'CATALOG', 'NEXUS', 'REMOTE'] } },
+            orderBy: { createdAt: 'desc' },
+            take: 200,
+        }),
+        (prisma as any).series.findMany({
+            include: {
+                episodes: { select: { status: true } },
+            },
+            orderBy: { updatedAt: 'desc' },
+            take: 120,
+        }),
+        userId
+            ? prisma.playbackHistory.findMany({
+                where: { userId },
+                include: { video: true },
+                orderBy: { updatedAt: 'desc' },
+                take: 12,
+            })
+            : Promise.resolve([]),
+        userId
+            ? prisma.favorite.findMany({
+                where: { userId },
+                include: { video: true },
+                orderBy: { createdAt: 'desc' },
+                take: 24,
+            })
+            : Promise.resolve([]),
+        userId
+            ? (prisma as any).watchSession.findMany({
+                where: { userId },
+                orderBy: { createdAt: 'desc' },
+                take: 80,
+            })
+            : Promise.resolve([]),
+        userId
+            ? (prisma as any).userProfile.findUnique({
+                where: { userId },
+            })
+            : Promise.resolve(null),
+    ]);
+
+    const preferredCategories = history.map((entry: any) => entry.video?.category).filter(Boolean);
+    const preferredTags = history
+        .flatMap((entry: any) => splitTags(entry.video?.tags))
+        .map(normalizeText)
+        .filter(Boolean);
+    const preferredCategoryWeights = preferredCategories.reduce((acc: Record<string, number>, category: string) => {
+        const key = normalizeText(category);
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+    }, {});
+    const preferredTagWeights = preferredTags.reduce((acc: Record<string, number>, tag: string) => {
+        acc[tag] = (acc[tag] || 0) + 1;
+        return acc;
+    }, {});
+    const favoriteVideoIds = favorites.map((entry: any) => entry.videoId).filter(Boolean);
+    const recentVideoIds = history.map((entry: any) => entry.videoId).filter(Boolean);
+    const completedVideoIds = Array.from(new Set(
+        watchSessions
+            .filter((entry: any) => !!entry.completed)
+            .map((entry: any) => entry.videoId)
+            .filter(Boolean)
+    ));
+    const abandonedVideoIds = Array.from(new Set(
+        watchSessions
+            .filter((entry: any) => !!entry.abandoned)
+            .map((entry: any) => entry.videoId)
+            .filter(Boolean)
+    ));
+    const familySignal = preferredTags.filter((tag) => /familia|family|infantil|kids|animacao|anime|aventura|comedia/.test(tag)).length;
+    const adultSignal = preferredTags.filter((tag) => /terror|horror|thriller|crime|suspense|guerra|adult/.test(tag)).length;
+    const dayMoment = getDayMoment();
+
+    const scoredVideos = videosRaw
+        .map((video: any) => toDiscoveryVideoItem(video, getVideoDiscoveryScore(video, {
+            preferredCategories,
+            preferredTags,
+            preferredCategoryWeights,
+            preferredTagWeights,
+            favoriteVideoIds,
+            recentVideoIds,
+            completedVideoIds,
+            abandonedVideoIds,
+            audienceProfile,
+        })))
+        .filter((item: any) => !!item.image)
+        .sort((a: any, b: any) => b.score - a.score);
+
+    const scoredSeries = seriesRaw
+        .map((series: any) => {
+            const readyEpisodes = (series.episodes || []).filter((episode: any) => episode.status === 'READY').length;
+            const totalEpisodes = (series.episodes || []).length;
+            return {
+                ...series,
+                readyEpisodes,
+                progress: totalEpisodes > 0 ? Math.round((readyEpisodes / totalEpisodes) * 100) : 0,
+            };
+        })
+        .map((series: any) => toDiscoverySeriesItem(series, getSeriesDiscoveryScore(series, {
+            preferredCategories,
+            preferredTags,
+            preferredCategoryWeights,
+            preferredTagWeights,
+            audienceProfile,
+        })))
+        .filter((item: any) => !!item.image)
+        .sort((a: any, b: any) => b.score - a.score);
+
+    const visibilityFilteredVideos = audienceProfile === 'kids'
+        ? scoredVideos.filter((item: any) => !item.isAdult)
+        : scoredVideos;
+    const visibilityFilteredSeries = audienceProfile === 'kids'
+        ? scoredSeries.filter((item: any) => !item.isAdult)
+        : scoredSeries;
+
+    const allItems = [...visibilityFilteredVideos, ...visibilityFilteredSeries].sort((a, b) => b.score - a.score);
+    const continueWatching = history
+        .filter((entry: any) => {
+            const duration = Number(entry.video?.duration || 0);
+            const lastTime = Number(entry.lastTime || 0);
+            if (lastTime < 60) return false;
+            if (duration > 0 && lastTime >= duration * 0.92) return false;
+            return true;
+        })
+        .map((entry: any) => visibilityFilteredVideos.find((item: any) => item.id === entry.videoId))
+        .filter(Boolean);
+    const preferredItems = allItems.filter((item: any) => {
+        const normalizedCategory = normalizeText(item.category);
+        const itemTags = (item.tags || []).map(normalizeText);
+        return !abandonedVideoIds.includes(item.id) && (
+            preferredCategories.some((category) => normalizeText(category) === normalizedCategory)
+            || itemTags.some((tag: string) => preferredTags.includes(tag))
+        );
+    });
+    const rows = buildDiscoveryRows(allItems, {
+        continueWatching,
+        preferredItems,
+        avgSessionTime: Number(userProfile?.avgSessionTime || 0),
+        completionRate: Number(userProfile?.completionRate || 0),
+        dayMoment,
+        familyHeavy: familySignal >= adultSignal,
+        adultHeavy: adultSignal > familySignal,
+        audienceProfile,
+    });
+    const featured = chooseFeaturedItem(allItems, {
+        dayMoment,
+        familyHeavy: familySignal >= adultSignal,
+        adultHeavy: adultSignal > familySignal,
+        audienceProfile,
+    }) || dubbedFirstChoice(allItems) || allItems[0] || null;
+
+    return {
+        featured,
+        rows,
+        movies: diversifyItems(visibilityFilteredVideos, 30),
+        series: diversifyItems(visibilityFilteredSeries, 30),
+        spotlight: diversifyItems(allItems, 12),
+        audienceProfile,
+    };
+}
+
 // Middleware CORS Enable All
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 // 📺 IPTV MODULE
 app.use('/api/iptv', iptvRouter);
+app.use('/api/v1/iptv', iptvRouter);
 
 // 🎙️ DUBBING & SUBTITLES MODULE
 app.use('/api/v1', dubbingRoutes);
@@ -242,8 +1143,8 @@ app.get('/api/v1/videos/recommended', async (req, res) => {
     try {
         // Pega 6 mais vistos e 6 mais recentes para diversidade
         const [topViewed, latest] = await Promise.all([
-            prisma.video.findMany({ where: { status: 'READY' }, take: 6, orderBy: { views: 'desc' } }),
-            prisma.video.findMany({ where: { status: 'READY' }, take: 6, orderBy: { createdAt: 'desc' } })
+            prisma.video.findMany({ where: { status: { in: ['READY', 'CATALOG', 'NEXUS', 'REMOTE'] } }, take: 6, orderBy: { views: 'desc' } }),
+            prisma.video.findMany({ where: { status: { in: ['READY', 'CATALOG', 'NEXUS', 'REMOTE'] } }, take: 6, orderBy: { createdAt: 'desc' } })
         ]);
 
         const merged = [...topViewed, ...latest];
@@ -465,27 +1366,36 @@ app.post('/api/v1/videos/upload', upload.fields([
 // Ingestão Automática via Nexus Agent
 app.post('/api/v1/videos/auto-ingest', async (req, res) => {
     try {
-        const { title, description, category, externalSource, thumbnailUrl, tags } = req.body;
-
-        // Validação: Se externalSource é um magnet link, forçar status NEXUS
+        const { title, description, category, externalSource, thumbnailUrl, tags, status: requestedStatus, tmdbId, imdbId, quality, language, sourceSite, backdropUrl } = req.body;
         const isMagnetLink = externalSource && externalSource.startsWith('magnet:');
-        let videoId = undefined;
+        const videoId = isMagnetLink ? extractMagnetInfoHash(externalSource) || undefined : undefined;
+        const normalizedCategory = inferCategory(category, tags, title);
+        const normalizedQuality = inferQuality(quality, title);
+        const normalizedLanguage = inferLanguage(language, tags, title);
+        const normalizedTags = Array.from(new Set(
+            (Array.isArray(tags) ? tags : String(tags || '').split(','))
+                .map((tag) => String(tag).trim())
+                .filter(Boolean)
+                .concat(sourceSite ? [sourceSite] : [])
+                .concat(normalizedLanguage !== 'und' ? [normalizedLanguage] : [])
+                .concat(normalizedQuality ? [normalizedQuality] : [])
+        ));
+        const finalStatus = isMagnetLink
+            ? (requestedStatus === 'CATALOG' ? 'CATALOG' : 'NEXUS')
+            : (requestedStatus || 'READY');
 
-        if (isMagnetLink) {
-            const hashMatch = externalSource.match(/btih:([a-zA-Z0-9]+)/i);
-            if (hashMatch) {
-                videoId = hashMatch[1].toLowerCase();
+        const existing = await prisma.video.findFirst({
+            where: {
+                OR: [
+                    videoId ? { id: videoId } : undefined,
+                    tmdbId ? { tmdbId: String(tmdbId) } : undefined,
+                    {
+                        title: title || '',
+                        category: normalizedCategory,
+                    }
+                ].filter(Boolean) as any
             }
-        }
-
-        // Verificar se já existe
-        const existing = await prisma.video.findUnique({
-            where: { id: videoId || 'unknown' }
         });
-
-        if (existing) {
-            return res.json(existing);
-        }
 
         const systemAgent = await prisma.user.upsert({
             where: { email: 'arconte@streamforge.ai' },
@@ -499,21 +1409,51 @@ app.post('/api/v1/videos/auto-ingest', async (req, res) => {
             }
         });
 
-        const video = await prisma.video.create({
-            data: {
-                id: videoId, // Se for magnet, usa o infoHash como ID
-                title: title || 'Ativo Nexus',
-                description: description || 'Extraído automaticamente pelo Arconte.',
-                category: category || 'NEXUS',
-                status: isMagnetLink ? 'NEXUS' : 'READY',
-                originalFilename: 'nexus-at-source',
-                userId: systemAgent.id,
-                hlsPath: externalSource,
-                thumbnailPath: thumbnailUrl,
-                tags: Array.isArray(tags) ? tags.join(',') : tags,
-                isPredictive: req.body.predictive || false
-            }
-        });
+        const payload = {
+            title: title || 'Ativo Nexus',
+            description: description || 'Extraído automaticamente pelo Arconte.',
+            category: normalizedCategory,
+            status: finalStatus,
+            originalFilename: 'nexus-at-source',
+            userId: systemAgent.id,
+            hlsPath: isMagnetLink ? externalSource : null,
+            storageKey: finalStatus === 'CATALOG' ? externalSource : null,
+            thumbnailPath: thumbnailUrl || backdropUrl || null,
+            tags: normalizedTags.join(','),
+            isPredictive: req.body.predictive || false,
+            tmdbId: tmdbId ? String(tmdbId) : null,
+            imdbId: imdbId ? String(imdbId) : null,
+            quality: normalizedQuality,
+            originalTitle: req.body.originalTitle || null,
+            hasPortuguese: normalizedLanguage.startsWith('pt-BR'),
+            hasPortugueseAudio: normalizedLanguage === 'pt-BR',
+            hasPortugueseSubs: normalizedLanguage === 'pt-BR-sub' || normalizedLanguage === 'pt-BR',
+            hasDubbed: normalizedLanguage === 'pt-BR',
+        };
+
+        const video = existing
+            ? await prisma.video.update({
+                where: { id: existing.id },
+                data: {
+                    ...payload,
+                    status: existing.status === 'READY' ? existing.status : payload.status,
+                    hlsPath: payload.hlsPath || existing.hlsPath,
+                    storageKey: payload.storageKey || existing.storageKey,
+                    thumbnailPath: payload.thumbnailPath || existing.thumbnailPath,
+                    tags: Array.from(new Set(
+                        `${existing.tags || ''},${payload.tags || ''}`
+                            .split(',')
+                            .map((tag) => tag.trim())
+                            .filter(Boolean)
+                    )).join(','),
+                }
+            })
+            : await prisma.video.create({
+                data: {
+                    ...payload,
+                    id: videoId,
+                }
+            });
 
         // Notificar via Socket.io que o Arconte adicionou algo novo
         io.emit('arconte_new_content', {
@@ -528,7 +1468,7 @@ app.post('/api/v1/videos/auto-ingest', async (req, res) => {
         // Despacha o Arconte para analisar o conteúdo sem travar a resposta
         if (isMagnetLink) {
             // Se for preditivo (Arconte decidiu que é tendência forte), enfileira download
-            if (req.body.predictive) {
+            if (req.body.predictive && finalStatus !== 'CATALOG') {
                 console.log(`🧠 [Predictive] Iniciando prefech preventivo: ${video.title}`);
                 queueDownload({
                     magnetURI: externalSource,
@@ -539,14 +1479,14 @@ app.post('/api/v1/videos/auto-ingest', async (req, res) => {
                 }).catch(err => console.error('❌ Erro no prefetch preditivo:', err));
             }
 
-            if (!tags?.includes('Enriched')) {
+            if (!normalizedTags.includes('Enriched')) {
                 aiService.enrichContent(video.title, description || '').then(async (enriched: any) => {
                     await prisma.video.update({
                         where: { id: video.id },
                         data: {
                             title: enriched.title,
                             description: enriched.description,
-                            category: enriched.category,
+                            category: inferCategory(enriched.category, normalizedTags, enriched.title),
                             thumbnailPath: enriched.poster || video.thumbnailPath,
                             tags: [...(video.tags?.split(',') || []), ...enriched.tags, 'Enriched', 'Autobot'].join(',')
                         }
@@ -567,6 +1507,74 @@ app.post('/api/v1/videos/auto-ingest', async (req, res) => {
     } catch (error) {
         console.error('❌ Falha na ingestão automática:', error);
         res.status(500).json({ error: 'Falha na ingestão automática' });
+    }
+});
+
+app.put('/api/v1/videos/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const video = await prisma.video.update({
+            where: { id },
+            data: req.body,
+        });
+
+        res.json(video);
+    } catch (error: any) {
+        console.error('❌ Falha ao atualizar vídeo:', error);
+        res.status(500).json({ error: error.message || 'Falha ao atualizar vídeo' });
+    }
+});
+
+app.post('/api/v1/videos/:id/play', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const video = await prisma.video.findUnique({ where: { id } });
+
+        if (!video) {
+            return res.status(404).json({ error: 'Vídeo não encontrado' });
+        }
+
+        if (video.status === 'READY') {
+            return res.json({ status: 'READY', video });
+        }
+
+        const resolvedSource = await resolveMovieMaterializationSource(video);
+        const magnetURI = resolvedSource?.magnetURI || null;
+
+        if (!magnetURI) {
+            return res.status(400).json({ error: 'Ativo sem magnet para materialização.' });
+        }
+
+        if (!video.storageKey?.startsWith('magnet:') || !video.hlsPath?.startsWith('magnet:')) {
+            await prisma.video.update({
+                where: { id: video.id },
+                data: {
+                    storageKey: magnetURI,
+                    hlsPath: magnetURI,
+                    quality: resolvedSource?.quality || video.quality,
+                    hasPortuguese: resolvedSource?.language?.startsWith('pt-BR') || video.hasPortuguese,
+                    hasPortugueseAudio: resolvedSource?.language === 'pt-BR' || video.hasPortugueseAudio,
+                    hasPortugueseSubs: resolvedSource?.language === 'pt-BR-sub' || resolvedSource?.language === 'pt-BR' || video.hasPortugueseSubs,
+                    hasDubbed: resolvedSource?.language === 'pt-BR' || video.hasDubbed,
+                    tags: Array.from(new Set(
+                        `${video.tags || ''},${resolvedSource?.sourceSite || ''},ResolvedSource`
+                            .split(',')
+                            .map((tag) => tag.trim())
+                            .filter(Boolean)
+                    )).join(','),
+                }
+            });
+        }
+
+        await materializeVideo(video.id, magnetURI, 90);
+
+        res.status(202).json({
+            status: 'PROCESSING',
+            message: 'Materialização iniciada.',
+        });
+    } catch (error: any) {
+        console.error('❌ Falha ao iniciar materialização:', error);
+        res.status(500).json({ error: error.message || 'Falha ao iniciar materialização' });
     }
 });
 
@@ -721,9 +1729,16 @@ app.get('/api/v1/videos/:id/stream', async (req, res) => {
             return res.status(404).json({ error: 'Video not found' });
         }
 
-        const videoPath = path.join(__dirname, '..', video.storageKey);
+        const storageKey = video.storageKey;
+        const candidatePaths = [
+            storageKey && path.isAbsolute(storageKey) ? storageKey : '',
+            storageKey ? path.join(__dirname, '../uploads', storageKey) : '',
+            storageKey ? path.join(__dirname, '..', storageKey) : '',
+        ].filter(Boolean);
 
-        if (!fs.existsSync(videoPath)) {
+        const videoPath = candidatePaths.find((candidate) => fs.existsSync(candidate));
+
+        if (!videoPath || !fs.existsSync(videoPath)) {
             return res.status(404).json({ error: 'Video file not found' });
         }
 
@@ -786,49 +1801,24 @@ async function processVideo(videoId: string, inputPath: string) {
 app.get('/api/v1/recommendations', async (req, res) => {
     try {
         const userId = req.query.userId as string;
-        if (!userId) {
-            // Se não logado, retorna vídeos populares ou aleatórios
-            const randomVideos = await prisma.video.findMany({
-                take: 10,
-                orderBy: { views: 'desc' }
-            });
-            return res.json(randomVideos);
-        }
-
-        // 1. Pegar o histórico recente do usuário
-        const history = await prisma.playbackHistory.findMany({
-            where: { userId },
-            include: { video: true },
-            orderBy: { updatedAt: 'desc' },
-            take: 5
-        });
-
-        // 2. Extrair categorias e tags do histórico
-        const categories = history.map(h => h.video.category);
-        const allTags = history.flatMap(h => h.video.tags?.split(',') || []);
-
-        // 3. Buscar vídeos similares (mesma categoria ou tags)
-        const recommendations = await prisma.video.findMany({
-            where: {
-                OR: [
-                    { category: { in: categories } },
-                    {
-                        tags: {
-                            contains: allTags[0] // Busca simples pela primeira tag por enquanto
-                        }
-                    }
-                ],
-                NOT: {
-                    id: { in: history.map(h => h.videoId) } // Não recomendar o que já viu
-                }
-            },
-            take: 10,
-            orderBy: { views: 'desc' }
-        });
-
-        res.json(recommendations);
+        const audienceProfile = String(req.query.profile || 'house');
+        const discovery = await buildDiscoveryFeed(userId, audienceProfile);
+        const recommendationRow = discovery.rows.find((row: any) => row.id === 'family-portuguese') || discovery.rows[0];
+        res.json(recommendationRow?.items || []);
     } catch (error) {
         res.status(500).json({ error: 'Falha ao buscar recomendações' });
+    }
+});
+
+app.get('/api/v1/discovery/feed', async (req, res) => {
+    try {
+        const userId = req.query.userId as string | undefined;
+        const audienceProfile = String(req.query.profile || 'house');
+        const feed = await buildDiscoveryFeed(userId, audienceProfile);
+        res.json(feed);
+    } catch (error: any) {
+        console.error('❌ [Discovery] Falha ao montar feed:', error);
+        res.status(500).json({ error: error?.message || 'Falha ao montar discovery feed' });
     }
 });
 

@@ -1,6 +1,7 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { useVideoFeed } from '@/hooks/useVideos';
+import { useDiscoveryFeed } from '@/hooks/useDiscovery';
 import { VideoCard } from './VideoCard';
 import { Loader2, ChevronRight, Frown, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -96,6 +97,24 @@ const VideoSection = ({ title, videos, loading, icon }: VideoSectionProps) => {
 
 export const VideoList: React.FC = () => {
     const { videos, loading, error, refresh } = useVideoFeed();
+    const { feed } = useDiscoveryFeed();
+    const inProcessing = videos.filter(v => v.status === 'PROCESSING' || v.status === 'WAITING');
+    const readyVideos = videos.filter(v => v.status === 'READY' || v.status === 'NEXUS');
+    const byId = React.useMemo(() => new Map(videos.map((video) => [video.id, video])), [videos]);
+    const discoveryRows = React.useMemo(() => {
+        if (!feed?.rows?.length) return [];
+
+        return feed.rows
+            .map((row) => ({
+                title: row.title,
+                videos: row.items
+                    .filter((item) => item.kind === 'video')
+                    .map((item) => byId.get(item.id))
+                    .filter(Boolean) as any[],
+            }))
+            .filter((row) => row.videos.length > 0);
+    }, [feed, byId]);
+    const categories = Array.from(new Set(readyVideos.map(v => v.category || 'Geral')));
 
     if (error) {
         return (
@@ -122,12 +141,6 @@ export const VideoList: React.FC = () => {
         );
     }
 
-    const inProcessing = videos.filter(v => v.status === 'PROCESSING' || v.status === 'WAITING');
-    const readyVideos = videos.filter(v => v.status === 'READY' || v.status === 'NEXUS');
-
-    // Agrupar por categoria (apenas os READY)
-    const categories = Array.from(new Set(readyVideos.map(v => v.category || 'Geral')));
-
     return (
         <div className="relative z-10 space-y-8 pb-32">
             {/* Safe spacing from Hero/Recommendations */}
@@ -145,13 +158,20 @@ export const VideoList: React.FC = () => {
             {readyVideos.length > 0 && (
                 <VideoSection
                     title="Destaques Nexus"
-                    videos={readyVideos.slice(0, 10)}
+                    videos={discoveryRows[0]?.videos?.slice(0, 10) || readyVideos.slice(0, 10)}
                     loading={loading}
                     icon={<Sparkles className="text-primary animate-pulse" size={24} />}
                 />
             )}
 
-            {categories.map(cat => (
+            {discoveryRows.length > 0 ? discoveryRows.slice(1, 7).map((row) => (
+                <VideoSection
+                    key={row.title}
+                    title={row.title}
+                    videos={row.videos}
+                    loading={loading}
+                />
+            )) : categories.map(cat => (
                 <VideoSection
                     key={cat}
                     title={cat}

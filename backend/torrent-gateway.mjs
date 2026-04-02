@@ -25,6 +25,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = 3333;
+const PREVIEW_METADATA_TIMEOUT_MS = 12000;
 
 // Cliente WebTorrent do servidor (usa TCP/UDP - muito mais rápido!)
 const client = new WebTorrent({
@@ -66,7 +67,7 @@ app.get('/health', (req, res) => {
  * Adiciona um torrent e retorna informações dos arquivos
  */
 app.post('/api/torrent/add', async (req, res) => {
-    const { magnetURI } = req.body;
+    const { magnetURI, preview = false } = req.body;
 
     if (!magnetURI) {
         return res.status(400).json({ error: 'magnetURI é obrigatório' });
@@ -155,8 +156,8 @@ app.post('/api/torrent/add', async (req, res) => {
         await new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
                 cleanup();
-                reject(new Error('Timeout aguardando metadata (45s)'));
-            }, 45000);
+                reject(new Error(`Timeout aguardando metadata (${preview ? PREVIEW_METADATA_TIMEOUT_MS / 1000 : 45}s)`));
+            }, preview ? PREVIEW_METADATA_TIMEOUT_MS : 45000);
 
             const onMetadata = () => {
                 cleanup();
@@ -188,6 +189,12 @@ app.post('/api/torrent/add', async (req, res) => {
     } catch (error) {
         console.error('❌ Falha ao processar torrent:', error.message);
         console.error('Stack:', error.stack);
+        if (preview && /Timeout aguardando metadata/i.test(String(error.message || ''))) {
+            return res.status(202).json({
+                pending: true,
+                error: error.message
+            });
+        }
         res.status(500).json({ error: error.message });
     }
 });
@@ -311,6 +318,59 @@ app.get('/api/metadata/:infoHash/:fileIndex', async (req, res) => {
 /**
  * Stream de um arquivo específico com suporte a Range Requests
  */
+app.get('/api/stream-compatible/:infoHash/:fileIndex', (req, res) => {
+    const { infoHash, fileIndex } = req.params;
+    const torrent = activeTorrents.get(infoHash);
+
+    if (!torrent) return res.status(404).json({ error: 'Torrent não encontrado' });
+
+    const file = torrent.files[parseInt(fileIndex)];
+    if (!file) return res.status(404).json({ error: 'Arquivo não encontrado' });
+
+    file.select();
+    console.log(`🎬 Transcoding compatível: ${file.name}`);
+
+    res.writeHead(200, {
+        'Content-Type': 'video/mp4',
+        'Transfer-Encoding': 'chunked'
+    });
+
+    const stream = file.createReadStream();
+    const command = ffmpeg(stream)
+        .inputFormat(path.extname(file.name).substring(1) === 'mkv' ? 'matroska' : 'mp4')
+        .outputOptions([
+            '-map 0:v:0',
+            '-map 0:a:0?',
+            '-c:v libx264',
+            '-preset veryfast',
+            '-pix_fmt yuv420p',
+            '-profile:v high',
+            '-level 4.1',
+            '-c:a aac',
+            '-ac 2',
+            '-b:a 192k',
+            '-movflags frag_keyframe+empty_moov+default_base_moof',
+            '-f mp4'
+        ])
+        .on('error', (err) => {
+            if (!err.message.includes('Output stream closed')) {
+                console.error('❌ Erro no transcoding compatível:', err.message);
+            }
+            stream.destroy();
+        })
+        .on('end', () => {
+            console.log('✅ Stream compatível finalizado');
+        });
+
+    command.pipe(res, { end: true });
+
+    req.on('close', () => {
+        console.log('🛑 Cliente desconectou do stream compatível');
+        command.kill();
+        stream.destroy();
+    });
+});
+
 app.get('/api/stream/:infoHash/:fileIndex', (req, res) => {
     const { infoHash, fileIndex } = req.params;
     const { audioIndex } = req.query; // Index sequencial (0, 1, 2...) da faixa de áudio

@@ -24,7 +24,11 @@ class ArconteAdmin {
         logger.info(`[ARCONTE] 🔍 Investigando demanda profunda por: "${term}"`);
 
         try {
-            const nexusResponse = await axios.post(`${NEXUS_API}/search`, { query: term });
+            const nexusResponse = await axios.post(`${NEXUS_API}/search/ultra`, {
+                query: term,
+                category: 'Movies',
+                limit: 10
+            });
             const allResults = nexusResponse.data.results;
 
             if (!allResults || allResults.length === 0) {
@@ -89,7 +93,11 @@ class ArconteAdmin {
             setTimeout(async () => {
                 logger.info(`[ARCONTE] 🌀 Sinergia de Coleção ativada para: "${rTerm}"`);
                 try {
-                    const nexusResponse = await axios.post(`${NEXUS_API}/search`, { query: rTerm });
+                    const nexusResponse = await axios.post(`${NEXUS_API}/search/ultra`, {
+                        query: rTerm,
+                        category: 'Movies',
+                        limit: 10
+                    });
                     const results = nexusResponse.data.results;
                     if (results && results.length > 0) {
                         const best = results.sort((a: any, b: any) => b.seeds - a.seeds)[0];
@@ -162,7 +170,11 @@ export const arconteAdmin = new ArconteAdmin();
  */
 export async function runSearch(query: string) {
     try {
-        const response = await axios.post(`${NEXUS_API}/search`, { query });
+        const response = await axios.post(`${NEXUS_API}/search/ultra`, {
+            query,
+            category: 'Movies',
+            limit: 10
+        });
         return response.data.results || [];
     } catch (error: any) {
         console.error(`❌ [NexusBridge] Erro na busca bruta: ${query}`, error);

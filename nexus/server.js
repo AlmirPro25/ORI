@@ -101,7 +101,7 @@ async function performDeepScraping(term) {
     let browser = null;
     try {
         browser = await puppeteer.launch({
-            headless: true,
+            headless: 'new',
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -348,18 +348,7 @@ async function performDeepScraping(term) {
     } catch (error) {
         logger.error(`[ENGINE] Erro crítico multi-source para "${term}": ${error.message}`);
 
-        // --- FALLBACK DE SEGURANÇA PARA DEMONSTRAÇÃO ---
-        logger.warn(`[ENGINE] ⚠️ Ativando Protocolo de Emergência (Mock Data).`);
-        return [{
-            title: `Sintel (Open Movie) - ${term} edition`,
-            category: 'Movies',
-            seeds: 999,
-            peers: 50,
-            size: '1.2 GB',
-            magnetLink: 'magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10&dn=Sintel&tr=udp%3A%2F%2Fexplodie.org%3A6969&tr=udp%3A%2F%2Ftracker.coppersurfer.tk%3A6969&tr=udp%3A%2F%2Ftracker.empire-js.us%3A1337&tr=udp%3A%2F%2Ftracker.leechers-paradise.org%3A6969&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337&tr=wss%3A%2F%2Ftracker.btorrent.xyz&tr=wss%3A%2F%2Ftracker.fastcast.nz&tr=wss%3A%2F%2Ftracker.openwebtorrent.com',
-            poster: 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/ca/Sintel_poster.jpg/800px-Sintel_poster.jpg',
-            sourceSite: 'Nexus Emergency Cache'
-        }];
+        return [];
     } finally {
         if (browser) await browser.close();
     }
@@ -412,22 +401,7 @@ app.post('/api/search', searchRateLimiter, async (req, res) => {
                 if (!freshResults || freshResults.length === 0) {
                     logger.warn(`[API] Nenhuma semente encontrada para "${normalizedTerm}".`);
 
-                    // --- FALLBACK DE SEGURANÇA (DEMO) ---
-                    logger.warn(`[ENGINE] ⚠️ Ativando Protocolo de Emergência (Zero Results) para demostração.`);
-                    const fallback = [{
-                        title: `Sintel (Open Movie) - ${normalizedTerm} edition`,
-                        category: 'Movies',
-                        seeds: 999,
-                        peers: 50,
-                        size: '1.2 GB',
-                        magnetLink: 'magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10&dn=Sintel&tr=udp%3A%2F%2Fexplodie.org%3A6969&tr=udp%3A%2F%2Ftracker.coppersurfer.tk%3A6969&tr=udp%3A%2F%2Ftracker.empire-js.us%3A1337&tr=udp%3A%2F%2Ftracker.leechers-paradise.org%3A6969&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337&tr=wss%3A%2F%2Ftracker.btorrent.xyz&tr=wss%3A%2F%2Ftracker.fastcast.nz&tr=wss%3A%2F%2Ftracker.openwebtorrent.com',
-                        poster: 'https://upload.wikimedia.org/wikipedia/commons/thumb/c/ca/Sintel_poster.jpg/800px-Sintel_poster.jpg',
-                        sourceSite: 'Nexus Emergency Cache'
-                    }];
-
-                    // Salvar o fallback no cache para simular persistência
-                    // ... (implementação simplificada para retorno direto)
-                    return res.json({ source: 'live_network_fallback', results: fallback });
+                    return res.json({ source: 'live_network', results: [] });
                 }
 
                 // Aplicar priorização PT-BR aos resultados frescos
@@ -887,7 +861,14 @@ app.post('/api/search/series', searchRateLimiter, async (req, res) => {
     }
 
     try {
-        const seriesName = query.trim();
+        const rawSeriesName = query.trim();
+        const seriesName = rawSeriesName
+            .replace(/\bS\d{1,2}\b/gi, ' ')
+            .replace(/\bseason\s+\d+\b/gi, ' ')
+            .replace(/\btemporada\s+\d+\b/gi, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        const normalizedSeriesName = seriesName.replace(/[:\-]+/g, ' ').replace(/\s+/g, ' ').trim();
         logger.info(`[SERIES] 📺 Busca de série: "${seriesName}" ${season ? `| Temporada ${season}` : '| Todas'}`);
 
         // Construir variações de busca inteligentes para séries
@@ -902,6 +883,11 @@ app.post('/api/search/series', searchRateLimiter, async (req, res) => {
             seriesQueries.push(`${seriesName} season ${season}`);
             seriesQueries.push(`${seriesName} temporada ${season} dublado`);
             seriesQueries.push(`${seriesName} S${sNum} 1080p`);
+            if (normalizedSeriesName && normalizedSeriesName !== seriesName) {
+                seriesQueries.push(`${normalizedSeriesName} S${sNum}`);
+                seriesQueries.push(`${normalizedSeriesName} season ${season}`);
+                seriesQueries.push(`${normalizedSeriesName} S${sNum} 1080p`);
+            }
         } else {
             // Pack completo da série
             seriesQueries.push(`${seriesName} complete series`);
@@ -911,14 +897,21 @@ app.post('/api/search/series', searchRateLimiter, async (req, res) => {
             seriesQueries.push(`${seriesName} dublado`);
             seriesQueries.push(`${seriesName} dual audio`);
             seriesQueries.push(`${seriesName} complete`);
+            if (normalizedSeriesName && normalizedSeriesName !== seriesName) {
+                seriesQueries.push(`${normalizedSeriesName} complete series`);
+                seriesQueries.push(`${normalizedSeriesName} S01`);
+                seriesQueries.push(`${normalizedSeriesName} complete`);
+            }
         }
 
-        logger.info(`[SERIES] Variações: ${seriesQueries.join(' | ')}`);
+        const dedupedQueries = [...new Set(seriesQueries.map(q => q.replace(/\s+/g, ' ').trim()).filter(Boolean))];
+
+        logger.info(`[SERIES] Variações: ${dedupedQueries.join(' | ')}`);
 
         // Executar buscas em paralelo
         const allSearches = [];
 
-        for (const sq of seriesQueries) {
+        for (const sq of dedupedQueries) {
             allSearches.push(performDeepScraping(sq).catch(() => []));
 
             if (extendedSources) {

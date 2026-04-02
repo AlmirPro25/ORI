@@ -102,6 +102,7 @@ class ExtendedSources {
                         size: torrent.size,
                         seeds: torrent.seeds || 0,
                         peers: torrent.peers || 0,
+                        poster: movie.large_cover_image || movie.medium_cover_image || movie.background_image_original || null,
                         provider: 'YTS',
                         sourceSite: 'YTS',
                         quality: torrent.quality,

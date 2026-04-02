@@ -3,18 +3,133 @@ import { useVideoFeed } from '@/hooks/useVideos';
 import { VideoCard } from '@/components/VideoCard';
 import { motion } from 'framer-motion';
 import { Film, Loader2 } from 'lucide-react';
+import { Video } from '@/types/schema';
+import { useDiscoveryFeed } from '@/hooks/useDiscovery';
+
+const CATALOG_STATUSES = new Set(['READY', 'REMOTE', 'CATALOG', 'NEXUS']);
+
+const MOVIE_TERMS = [
+    'filme',
+    'filmes',
+    'movie',
+    'movies',
+    'acao',
+    'ação',
+    'drama',
+    'comedia',
+    'comédia',
+    'documentario',
+    'documentário',
+    'animacao',
+    'animação',
+    'terror',
+    'sci-fi',
+    'ficcao cientifica',
+    'ficção científica'
+];
+
+function isMovieLike(video: Video) {
+    const category = (video.category || '').toLowerCase();
+    const title = (video.title || '').toLowerCase();
+    const tags = (video.tags || '').toLowerCase();
+
+    if (category === 'series' || tags.includes('series')) {
+        return false;
+    }
+
+    return MOVIE_TERMS.some(term => category.includes(term) || title.includes(term) || tags.includes(term));
+}
+
+function hasPortuguesePriority(video: Video) {
+    const haystack = `${video.title || ''} ${video.tags || ''} ${video.category || ''}`.toLowerCase();
+    return Boolean(
+        video.hasDubbed ||
+        video.hasPortuguese ||
+        video.hasPortugueseAudio ||
+        video.hasPortugueseSubs ||
+        /dublado|dual audio|pt-br|portugues|legendado/.test(haystack)
+    );
+}
 
 export const MoviesPage: React.FC = () => {
     const { videos, loading } = useVideoFeed();
+    const { feed, loading: discoveryLoading } = useDiscoveryFeed();
 
     const movies = useMemo(() => {
-        return videos.filter(v =>
-            v.status === 'READY' &&
-            (v.category === 'Filme' || v.category === 'Movies' || v.category === 'Ação' || v.category === 'Documentário') // Expanding definition of 'Movie' based on likely categories
+        const videosById = new Map(videos.map((video) => [video.id, video]));
+        const discoveryMovieIds = new Set(
+            (feed?.movies || [])
+                .filter((item) => item.kind === 'video')
+                .map((item) => item.id)
         );
-    }, [videos]);
+        const baseMovies = videos.filter(video =>
+            CATALOG_STATUSES.has(video.status) &&
+            (isMovieLike(video) || discoveryMovieIds.has(video.id))
+        );
+        const discoveryOrder = new Map(
+            (feed?.movies || [])
+                .filter((item) => item.kind === 'video')
+                .map((item, index) => [item.id, index])
+        );
+        const discoveryPortuguese = new Set(
+            (feed?.movies || [])
+                .filter((item) => item.kind === 'video' && (item.isPortuguese || item.isDubbed))
+                .map((item) => item.id)
+        );
+        const synthesizedDiscoveryMovies = (feed?.movies || [])
+            .filter((item) => item.kind === 'video')
+            .map((item) => {
+                const existing = videosById.get(item.id);
+                if (existing) return existing;
 
-    if (loading) {
+                return {
+                    id: item.id,
+                    title: item.title,
+                    originalTitle: item.title,
+                    description: item.subtitle,
+                    category: item.category || 'Movies',
+                    status: (item.status as Video['status']) || 'CATALOG',
+                    originalFilename: item.title,
+                    storageKey: '',
+                    hlsPath: null,
+                    thumbnailPath: item.image,
+                    hasDubbed: item.isDubbed,
+                    hasPortuguese: item.isPortuguese,
+                    hasPortugueseAudio: item.isDubbed,
+                    hasPortugueseSubs: item.isPortuguese,
+                    tags: Array.isArray(item.tags) ? item.tags.join(', ') : '',
+                    duration: null,
+                    views: item.views || 0,
+                    userId: 'nexus-agent-system',
+                    createdAt: item.createdAt,
+                    updatedAt: item.createdAt,
+                } as Video;
+            });
+
+        const mergedMovies = [...baseMovies];
+        for (const candidate of synthesizedDiscoveryMovies) {
+            if (!mergedMovies.some((video) => video.id === candidate.id)) {
+                mergedMovies.push(candidate);
+            }
+        }
+
+        return [...mergedMovies].sort((a, b) => {
+            const indexA = discoveryOrder.get(a.id);
+            const indexB = discoveryOrder.get(b.id);
+            const ptbrA = discoveryPortuguese.has(a.id) || hasPortuguesePriority(a);
+            const ptbrB = discoveryPortuguese.has(b.id) || hasPortuguesePriority(b);
+
+            if (ptbrA !== ptbrB) return ptbrA ? -1 : 1;
+
+            if (indexA !== undefined && indexB !== undefined) return indexA - indexB;
+            if (indexA !== undefined) return -1;
+            if (indexB !== undefined) return 1;
+
+            return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        });
+    }, [videos, feed]);
+
+    if (loading || discoveryLoading) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-background">
                 <Loader2 className="animate-spin text-primary" size={48} />
@@ -38,7 +153,10 @@ export const MoviesPage: React.FC = () => {
                             Cine <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary to-purple-500">Nexus</span>
                         </h1>
                         <p className="text-white/40 text-lg font-medium mt-2">
-                            Longas-metragens processados e indexados pelo núcleo.
+                            Longas-metragens organizados pelo feed editorial do Arconte.
+                        </p>
+                        <p className="text-white/20 text-sm font-medium mt-1">
+                            {movies.length} filme{movies.length !== 1 ? 's' : ''} visive{movies.length !== 1 ? 'is' : 'l'} no catalogo
                         </p>
                     </div>
                 </motion.div>
@@ -58,7 +176,10 @@ export const MoviesPage: React.FC = () => {
                     </div>
                 ) : (
                     <div className="text-center py-20 opacity-50">
-                        <p className="text-xl font-mono uppercase tracking-widest">Nenhum filme detectado no índice.</p>
+                        <p className="text-xl font-mono uppercase tracking-widest">Nenhum filme detectado no indice.</p>
+                        <p className="text-sm mt-4 text-white/40">
+                            O backend esta online, mas sua base local ainda nao possui filmes catalogados.
+                        </p>
                     </div>
                 )}
             </div>

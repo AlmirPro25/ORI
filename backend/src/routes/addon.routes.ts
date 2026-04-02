@@ -1,13 +1,9 @@
-
 import express from 'express';
 import { AddonService } from '../services/addon.service';
 
 const router = express.Router();
 
-/**
- * Listar Addons Instalados
- */
-router.get('/', async (req, res) => {
+router.get('/', async (_req, res) => {
     try {
         const addons = await AddonService.listAddons();
         res.json(addons);
@@ -16,14 +12,11 @@ router.get('/', async (req, res) => {
     }
 });
 
-/**
- * Instalar Addon
- */
 router.post('/install', async (req, res) => {
     try {
         const { url } = req.body;
         if (!url) {
-            return res.status(400).json({ error: 'URL do manifesto é obrigatória.' });
+            return res.status(400).json({ error: 'URL do manifesto e obrigatoria.' });
         }
         const result = await AddonService.installAddon(url);
         res.json({ success: true, addon: result });
@@ -32,9 +25,6 @@ router.post('/install', async (req, res) => {
     }
 });
 
-/**
- * Remover Addon
- */
 router.delete('/:id', async (req, res) => {
     try {
         await AddonService.removeAddon(req.params.id);
@@ -44,15 +34,11 @@ router.delete('/:id', async (req, res) => {
     }
 });
 
-/**
- * Buscar Streams de Todos os Addons (Agregador)
- */
 router.get('/streams/:type/:id', async (req, res) => {
     try {
         const { type, id } = req.params;
-        console.log(`📡 Buscando streams agregados para: ${type} ${id}`);
-        // Paralelizar com timeout
-        const streams = await AddonService.getStreamsFromAllAddons(type, id);
+        const title = typeof req.query.title === 'string' ? req.query.title : undefined;
+        const streams = await AddonService.getStreamsFromAllAddons(type, id, { title });
         res.json(streams);
     } catch (e: any) {
         console.error(`Erro ao buscar streams agregados: ${e.message}`);

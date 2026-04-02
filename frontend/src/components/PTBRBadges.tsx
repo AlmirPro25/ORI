@@ -18,8 +18,6 @@ const BR_RELEASE_GROUPS: Record<string, { quality: string; specialty: string; co
 };
 
 export function PTBRBadges({ title, className }: PTBRBadgesProps) {
-    const titleUpper = title.toUpperCase();
-    
     // Detectar áudio PT-BR
     const hasPTBRAudio = /\b(DUBLADO|DUB|DUAL|PT-BR|PT\.BR|PTBR|BRAZILIAN|BRASIL|NACIONAL|PORTUGUESE)\b/i.test(title);
     

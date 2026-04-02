@@ -14,7 +14,9 @@ import {
 } from 'lucide-react';
 import { useSeriesDetails } from '@/hooks/useSeries';
 import { EpisodeCard } from '@/components/EpisodeCard';
+import { AddonStreamDialog } from '@/components/AddonStreamDialog';
 import SeriesService from '@/services/api/series.service';
+import { Episode } from '@/types/series';
 
 export const SeriesDetailsPage: React.FC = () => {
     const { id } = useParams<{ id: string }>();
@@ -23,6 +25,12 @@ export const SeriesDetailsPage: React.FC = () => {
     const [selectedSeason, setSelectedSeason] = useState(1);
     const [downloading, setDownloading] = useState(false);
     const [seasonDropdownOpen, setSeasonDropdownOpen] = useState(false);
+    const [addonDialog, setAddonDialog] = useState<{ isOpen: boolean; id: string; title: string }>({
+        isOpen: false,
+        id: '',
+        title: '',
+    });
+    const [addonTargetEpisode, setAddonTargetEpisode] = useState<Episode | null>(null);
 
     const currentSeason = useMemo(() => {
         return series?.seasons?.find(s => s.seasonNumber === selectedSeason);
@@ -68,6 +76,20 @@ export const SeriesDetailsPage: React.FC = () => {
             setDownloading(false);
         }
     }, [id, downloading, refresh]);
+
+    const handleOpenEpisodeAddons = useCallback((episode: Episode) => {
+        if (!series) return;
+
+        const baseId = series.imdbId || (series.tmdbId ? String(series.tmdbId) : '');
+        if (!baseId) return;
+
+        setAddonDialog({
+            isOpen: true,
+            id: `${baseId}:${episode.seasonNumber}:${episode.episodeNumber}`,
+            title: `${series.title} S${String(episode.seasonNumber).padStart(2, '0')}E${String(episode.episodeNumber).padStart(2, '0')} - ${episode.title}`,
+        });
+        setAddonTargetEpisode(episode);
+    }, [series]);
 
     // Set first available season on load
     React.useEffect(() => {
@@ -320,7 +342,11 @@ export const SeriesDetailsPage: React.FC = () => {
                                 animate={{ opacity: 1, y: 0 }}
                                 transition={{ delay: idx * 0.03 }}
                             >
-                                <EpisodeCard episode={episode} onDownload={refresh} />
+                                <EpisodeCard
+                                    episode={episode}
+                                    onDownload={refresh}
+                                    onOpenAddons={handleOpenEpisodeAddons}
+                                />
                             </motion.div>
                         ))
                     ) : (
@@ -332,6 +358,31 @@ export const SeriesDetailsPage: React.FC = () => {
                     )}
                 </div>
             </div>
+
+            <AddonStreamDialog
+                isOpen={addonDialog.isOpen}
+                onClose={() => {
+                    setAddonDialog({ isOpen: false, id: '', title: '' });
+                    setAddonTargetEpisode(null);
+                }}
+                type="series"
+                id={addonDialog.id}
+                title={addonDialog.title}
+                onMaterializeStream={addonTargetEpisode ? async (stream) => {
+                    const magnetURI = stream.url?.startsWith('magnet:')
+                        ? stream.url
+                        : (stream.infoHash ? `magnet:?xt=urn:btih:${stream.infoHash}` : undefined);
+                    await SeriesService.materializeEpisodeFromAddon(addonTargetEpisode.id, {
+                        magnetURI,
+                        infoHash: stream.infoHash,
+                        fileIndex: typeof stream.fileIdx === 'number' ? stream.fileIdx : undefined,
+                        filename: stream.behaviorHints?.filename,
+                        title: stream.title || stream.name,
+                        sources: Array.isArray(stream.sources) ? stream.sources : undefined,
+                    });
+                    await refresh();
+                } : undefined}
+            />
         </div>
     );
 };

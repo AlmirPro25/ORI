@@ -27,8 +27,10 @@ class AddonService {
         await axios.delete(`/addons/${id}`);
     }
 
-    async getStreams(type: string, id: string) {
-        const response = await axios.get(`/addons/streams/${type}/${id}`);
+    async getStreams(type: string, id: string, title?: string) {
+        const response = await axios.get(`/addons/streams/${type}/${id}`, {
+            params: title ? { title } : undefined,
+        });
         return response.data;
     }
 }

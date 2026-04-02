@@ -1,38 +1,44 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { Sparkles, Play, ChevronRight } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
-import apiClient from '@/lib/axios';
 import { STORAGE_BASE_URL } from '@/lib/axios';
-import { useAuthStore } from '@/stores/auth.store';
+import { useDiscoveryFeed } from '@/hooks/useDiscovery';
+import { DiscoveryItem } from '@/types/discovery';
 
-interface RecommendedVideo {
-    id: string;
-    title: string;
-    category: string;
-    thumbnailPath: string;
-    views: number;
-}
+const resolveImage = (item: DiscoveryItem) => {
+    const image = item.image || item.backdrop || '';
+    if (!image) return '';
+    return image.startsWith('http') ? image : `${STORAGE_BASE_URL}/${image}`;
+};
+
+const getSafetyLabel = (item: DiscoveryItem) => {
+    if (item.safetyLabel === 'kids-safe') return 'Kids Safe';
+    if (item.safetyLabel === 'family-safe') return 'Family Safe';
+    if (item.safetyLabel === 'adult') return 'Adulto';
+    return 'Geral';
+};
 
 export const Recommendations: React.FC = () => {
-    const [videos, setVideos] = useState<RecommendedVideo[]>([]);
-    const [loading, setLoading] = useState(true);
-    const { user } = useAuthStore();
+    const { feed, loading } = useDiscoveryFeed();
 
-    useEffect(() => {
-        const fetchRecommendations = async () => {
-            try {
-                const res = await apiClient.get(`/recommendations?userId=${user?.id || ''}`);
-                setVideos(Array.isArray(res.data) ? res.data : []);
-            } catch (e) {
-                console.error('Falha ao buscar recomendações');
-            } finally {
-                setLoading(false);
-            }
-        };
+    const videos = React.useMemo(() => {
+        if (!feed) return [];
+        const hour = new Date().getHours();
+        const preferredRowId = hour < 18
+            ? 'light-now'
+            : hour < 23
+                ? 'movie-night'
+                : 'marathon-mode';
 
-        fetchRecommendations();
-    }, [user]);
+        return (
+            feed.rows.find((row) => row.id === preferredRowId)?.items ||
+            feed.rows.find((row) => row.id === 'family-portuguese')?.items ||
+            feed.rows.find((row) => row.id === 'because-you-like')?.items ||
+            feed.spotlight ||
+            []
+        ).slice(0, 10);
+    }, [feed]);
 
     if (loading || videos.length === 0) return null;
 
@@ -45,14 +51,14 @@ export const Recommendations: React.FC = () => {
                     </div>
                     <div>
                         <h2 className="text-4xl font-black tracking-[-0.04em] text-white uppercase italic leading-none">
-                            Neural <span className="text-gradient-primary">Predictions</span>
+                            Mood <span className="text-gradient-primary">Do Momento</span>
                         </h2>
-                        <p className="text-[10px] text-white/30 font-black uppercase tracking-[0.5em] mt-2 ml-0.5">Customized Evolutionary Feed</p>
+                        <p className="text-[10px] text-white/30 font-black uppercase tracking-[0.5em] mt-2 ml-0.5">A vitrine muda junto com o horario e o jeito da casa</p>
                     </div>
                 </div>
 
-                <Link to="/torrents" className="group flex items-center gap-4 px-6 py-3 bg-white/5 border border-white/10 rounded-2xl hover:bg-white/10 transition-all backdrop-blur-3xl">
-                    <span className="text-[10px] font-black uppercase tracking-[0.3em] text-white/40 group-hover:text-white">Expand Nexus Index</span>
+                <Link to="/addons" className="group flex items-center gap-4 px-6 py-3 bg-white/5 border border-white/10 rounded-2xl hover:bg-white/10 transition-all backdrop-blur-3xl">
+                    <span className="text-[10px] font-black uppercase tracking-[0.3em] text-white/40 group-hover:text-white">Expandir fontes</span>
                     <ChevronRight size={16} className="text-primary group-hover:translate-x-1 transition-transform" />
                 </Link>
             </div>
@@ -60,19 +66,17 @@ export const Recommendations: React.FC = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-10">
                 {videos.map((video, idx) => (
                     <motion.div
-                        key={video.id}
+                        key={`${video.kind}-${video.id}`}
                         initial={{ opacity: 0, y: 40 }}
                         whileInView={{ opacity: 1, y: 0 }}
                         viewport={{ once: true }}
                         transition={{ delay: idx * 0.05, duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
                         className="group relative"
                     >
-                        <Link to={`/videos/${video.id}`}>
+                        <Link to={video.href}>
                             <div className="aspect-[16/10] rounded-[2.8rem] overflow-hidden border border-white/5 bg-white/5 relative mb-6 shadow-2xl transition-all duration-700 group-hover:border-primary/50 group-hover:-translate-y-2">
                                 <img
-                                    src={video.thumbnailPath?.startsWith('http')
-                                        ? video.thumbnailPath
-                                        : `${STORAGE_BASE_URL}/${video.thumbnailPath}`}
+                                    src={resolveImage(video)}
                                     alt={video.title}
                                     className="w-full h-full object-cover opacity-60 group-hover:opacity-100 group-hover:scale-110 transition-all duration-1000 grayscale-[0.3] group-hover:grayscale-0"
                                 />
@@ -87,7 +91,7 @@ export const Recommendations: React.FC = () => {
 
                                 <div className="absolute top-6 right-6 translate-x-6 opacity-0 group-hover:translate-x-0 group-hover:opacity-100 transition-all duration-500">
                                     <span className="px-4 py-1.5 bg-black/60 backdrop-blur-2xl rounded-xl text-[9px] font-black uppercase tracking-widest text-primary border border-primary/20">
-                                        {video.category}
+                                        {video.badge} • {getSafetyLabel(video)}
                                     </span>
                                 </div>
                             </div>
@@ -99,7 +103,7 @@ export const Recommendations: React.FC = () => {
                                 <div className="flex items-center gap-3">
                                     <div className="w-1.5 h-1.5 rounded-full bg-primary/20 group-hover:bg-primary transition-colors animate-pulse" />
                                     <p className="text-[9px] text-white/20 font-black uppercase tracking-[0.2em] group-hover:text-white/40 transition-colors">
-                                        {video.views.toLocaleString()} Transmission Recorders
+                                        {video.isPortuguese ? 'Prioridade PT-BR' : video.category} • {Math.round(video.score)} pts
                                     </p>
                                 </div>
                             </div>

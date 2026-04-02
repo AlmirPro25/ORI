@@ -1,15 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Play, Loader2, AlertCircle, Film, Tv, X, MonitorPlay } from 'lucide-react';
+import { Play, Loader2, AlertCircle, Film, Tv, X, MonitorPlay, Download, Search } from 'lucide-react';
 import { addonService } from '@/services/addon.service';
 import { TorrentPlayer } from '@/components/TorrentPlayer';
 
 interface Stream {
     title?: string;
     name?: string;
+    description?: string;
     url?: string;
     infoHash?: string;
     ytId?: string;
+    fileIdx?: number;
+    sources?: string[];
     behaviorHints?: any;
     addonName?: string;
     _addonId?: string;
@@ -19,34 +22,247 @@ interface AddonStreamDialogProps {
     isOpen: boolean;
     onClose: () => void;
     type: 'movie' | 'series';
-    id: string; // TMDB ID (numérico) ou IMDB ID (tt...)
+    id: string;
     title: string;
+    onMaterializeStream?: (stream: Stream) => Promise<void>;
 }
 
 export const AddonStreamDialog: React.FC<AddonStreamDialogProps> = ({
-    isOpen, onClose, type, id, title
+    isOpen,
+    onClose,
+    type,
+    id,
+    title,
+    onMaterializeStream,
 }) => {
     const [loading, setLoading] = useState(false);
     const [streams, setStreams] = useState<Stream[]>([]);
     const [error, setError] = useState<string | null>(null);
     const [activeStream, setActiveStream] = useState<Stream | null>(null);
+    const [materializingKey, setMaterializingKey] = useState<string | null>(null);
+    const [selectedAddon, setSelectedAddon] = useState<string>('all');
+    const [streamQuery, setStreamQuery] = useState('');
 
-    // Reset ao abrir novo ID
     useEffect(() => {
         if (isOpen && id) {
             fetchStreams();
             setActiveStream(null);
+            setSelectedAddon('all');
+            setStreamQuery('');
         }
     }, [isOpen, id, type]);
+
+    const isBrokenStream = (stream: Stream) => {
+        const haystack = `${stream.title || ''} ${stream.name || ''} ${stream.description || ''}`.trim();
+        return /please configure|not configured|configuration required|^\[❌\]|\berror\b/i.test(haystack);
+    };
+
+    const addonPriority = (name?: string) => {
+        const normalized = String(name || '').toLowerCase();
+        if (normalized.includes('torrentio')) return 100;
+        if (normalized.includes('thepiratebay')) return 80;
+        if (normalized.includes('brazuca')) return 75;
+        if (normalized.includes('top streaming')) return 40;
+        if (normalized.includes('streaming catalogs')) return 30;
+        return 0;
+    };
+
+    const normalizeText = (value?: string) =>
+        String(value || '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase();
+
+    const getStreamText = (stream: Stream) =>
+        normalizeText([
+            stream.title,
+            stream.name,
+            stream.description,
+            stream.behaviorHints?.filename,
+        ].filter(Boolean).join(' '));
+
+    const getPortugueseAudioScore = (stream: Stream) => {
+        const haystack = getStreamText(stream);
+        let score = 0;
+
+        if (/\bdublado\b|\bdual audio\b|\bdual-audio\b|\bpt-br\b|\bportugues\b|\bportuguese\b|\baudio pt\b|\baudio br\b/.test(haystack)) {
+            score += 100;
+        }
+
+        if (/\bmulti\b|\bmulti audio\b|\blat\b/.test(haystack)) {
+            score += 20;
+        }
+
+        return score;
+    };
+
+    const getPortugueseSubtitleScore = (stream: Stream) => {
+        const haystack = getStreamText(stream);
+        let score = 0;
+
+        if (/\blegenda\b|\blegendado\b|\bsub\b|\bsubtitle\b|\bsubs\b/.test(haystack)) {
+            score += 10;
+        }
+
+        if (/\bpt-br\b|\bptbr\b|\bportugues\b|\bportuguese\b|\blegenda pt\b/.test(haystack)) {
+            score += 40;
+        }
+
+        return score;
+    };
+
+    const getQualityLabel = (stream: Stream) => {
+        const haystack = getStreamText(stream);
+        if (/\b2160\b|\b4k\b/.test(haystack)) return '4K';
+        if (/\b1080\b/.test(haystack)) return '1080p';
+        if (/\b720\b/.test(haystack)) return '720p';
+        return null;
+    };
+
+    const addonOptions = useMemo(() => {
+        const counts = new Map<string, number>();
+        streams.forEach((stream) => {
+            if (isBrokenStream(stream)) return;
+            const name = stream.addonName || 'Unknown Addon';
+            counts.set(name, (counts.get(name) || 0) + 1);
+        });
+
+        return Array.from(counts.entries())
+            .sort((a, b) => addonPriority(b[0]) - addonPriority(a[0]) || a[0].localeCompare(b[0]))
+            .map(([name, count]) => ({ name, count }));
+    }, [streams]);
+
+    const getAddonPortugueseBonus = (stream: Stream) => {
+        const addonName = normalizeText(stream.addonName);
+        const hasPortugueseValue = getPortugueseAudioScore(stream) > 0 || getPortugueseSubtitleScore(stream) > 0;
+        if (!hasPortugueseValue) return 0;
+        if (addonName.includes('brazuca')) return 35;
+        if (addonName.includes('top streaming')) return 12;
+        return 0;
+    };
+
+    const getSeriesEpisodeSpecificity = (stream: Stream) => {
+        const haystack = normalizeText([
+            stream.title,
+            stream.name,
+            stream.description,
+            stream.behaviorHints?.filename,
+        ].filter(Boolean).join(' '));
+        const target = normalizeText(title);
+        const episodeMatch = target.match(/s(\d{2})e(\d{2})/i);
+
+        let score = 0;
+        if (episodeMatch) {
+            const [, season, episode] = episodeMatch;
+            const seasonNum = String(Number(season));
+            const episodeNum = String(Number(episode));
+            const exactEpisodePatterns = [
+                new RegExp(`s${season}e${episode}`),
+                new RegExp(`${seasonNum}x${episodeNum}`),
+                new RegExp(`episodio\\s*${episodeNum}`),
+                new RegExp(`episode\\s*${episodeNum}`),
+            ];
+
+            if (exactEpisodePatterns.some((pattern) => pattern.test(haystack))) {
+                score += 120;
+            }
+
+            if (new RegExp(`e${episode}\\s*[-_]\\s*e?\\d{2}`).test(haystack) || new RegExp(`${seasonNum}x${episodeNum}\\s*[-_]\\s*\\d{1,2}`).test(haystack)) {
+                score -= 60;
+            }
+
+            if (new RegExp(`s${season}(?!e${episode})`).test(haystack) || new RegExp(`season\\s*${seasonNum}`).test(haystack) || new RegExp(`temporada\\s*${seasonNum}`).test(haystack)) {
+                score -= 10;
+            }
+        }
+
+        if (/\bcomplete\b|\bcompleta\b|\btemporada\b|\bseason\b/.test(haystack)) {
+            score -= 20;
+        }
+
+        if (/\bdual\b|\bdublado\b|\bpt-br\b/.test(haystack)) {
+            score += 10;
+        }
+
+        return score;
+    };
+
+    const getSwarmScore = (stream: Stream) => {
+        const haystack = `${stream.title || ''} ${stream.name || ''} ${stream.description || ''}`;
+        const matches = [...haystack.matchAll(/(?:👤|seed(?:s|ers?)?|peer(?:s)?)[^\d]{0,6}(\d{1,5})/gi)];
+        if (!matches.length) return 0;
+
+        return matches.reduce((best, match) => {
+            const value = Number(match[1] || 0);
+            return Number.isFinite(value) ? Math.max(best, value) : best;
+        }, 0);
+    };
+
+    const rankedStreams = useMemo(() => {
+        return [...streams]
+            .filter((stream) => !isBrokenStream(stream))
+            .sort((a, b) => {
+                const aAudio = getPortugueseAudioScore(a);
+                const bAudio = getPortugueseAudioScore(b);
+                if (aAudio !== bAudio) return bAudio - aAudio;
+
+                const aSubtitle = getPortugueseSubtitleScore(a);
+                const bSubtitle = getPortugueseSubtitleScore(b);
+                if (aSubtitle !== bSubtitle) return bSubtitle - aSubtitle;
+
+                const aPriority = addonPriority(a.addonName) + getAddonPortugueseBonus(a);
+                const bPriority = addonPriority(b.addonName) + getAddonPortugueseBonus(b);
+                if (aPriority !== bPriority) return bPriority - aPriority;
+
+                const aP2P = a.infoHash || a.url?.startsWith('magnet:') ? 1 : 0;
+                const bP2P = b.infoHash || b.url?.startsWith('magnet:') ? 1 : 0;
+                if (type === 'series' && aP2P !== bP2P) return bP2P - aP2P;
+
+                if (type === 'series') {
+                    const aSpecificity = getSeriesEpisodeSpecificity(a);
+                    const bSpecificity = getSeriesEpisodeSpecificity(b);
+                    if (aSpecificity !== bSpecificity) return bSpecificity - aSpecificity;
+                }
+
+                const aSwarm = getSwarmScore(a);
+                const bSwarm = getSwarmScore(b);
+                if (aSwarm !== bSwarm) return bSwarm - aSwarm;
+
+                return String(a.title || a.name || '').localeCompare(String(b.title || b.name || ''));
+            });
+    }, [streams, type, title]);
+
+    const filteredStreams = useMemo(() => {
+        const query = normalizeText(streamQuery);
+        return rankedStreams.filter((stream) => {
+            const matchesAddon = selectedAddon === 'all' || (stream.addonName || 'Unknown Addon') === selectedAddon;
+            if (!matchesAddon) return false;
+            if (!query) return true;
+
+            const haystack = getStreamText(stream);
+            return haystack.includes(query);
+        });
+    }, [rankedStreams, selectedAddon, streamQuery]);
+
+    const streamSummary = useMemo(() => {
+        const portugueseAudio = filteredStreams.filter((stream) => getPortugueseAudioScore(stream) > 0).length;
+        const portugueseSubtitle = filteredStreams.filter((stream) => getPortugueseSubtitleScore(stream) > 0).length;
+        const p2pCount = filteredStreams.filter((stream) => stream.infoHash || stream.url?.startsWith('magnet:')).length;
+        return {
+            total: filteredStreams.length,
+            portugueseAudio,
+            portugueseSubtitle,
+            p2pCount,
+        };
+    }, [filteredStreams]);
 
     const fetchStreams = async () => {
         setLoading(true);
         setError(null);
         try {
-            console.log(`🔍 Buscando streams para ${title} (${id})...`);
-            const results = await addonService.getStreams(type, id);
-            setStreams(results);
-        } catch (err: any) {
+            const results = await addonService.getStreams(type, id, title);
+            setStreams(Array.isArray(results) ? results : []);
+        } catch (err) {
             console.error(err);
             setError('Falha ao buscar streams nos addons.');
         } finally {
@@ -58,7 +274,21 @@ export const AddonStreamDialog: React.FC<AddonStreamDialogProps> = ({
         if (stream.url || stream.infoHash || stream.ytId) {
             setActiveStream(stream);
         } else {
-            alert('Este stream não possui URL ou InfoHash suportado.');
+            alert('Este stream nao possui URL ou InfoHash suportado.');
+        }
+    };
+
+    const handleMaterialize = async (stream: Stream) => {
+        if (!onMaterializeStream) return;
+        const key = stream.infoHash || stream.url || stream.title || stream.name || 'stream';
+        setMaterializingKey(key);
+        try {
+            await onMaterializeStream(stream);
+            onClose();
+        } catch (err) {
+            console.error(err);
+        } finally {
+            setMaterializingKey(null);
         }
     };
 
@@ -88,7 +318,7 @@ export const AddonStreamDialog: React.FC<AddonStreamDialogProps> = ({
                     {isMagnet && (
                         <TorrentPlayer
                             magnetURI={activeStream.url || `magnet:?xt=urn:btih:${activeStream.infoHash}`}
-                            videoId={`addon-${id}`} // ID temporário para chat/history no player
+                            videoId={`addon-${id}`}
                         />
                     )}
 
@@ -121,22 +351,16 @@ export const AddonStreamDialog: React.FC<AddonStreamDialogProps> = ({
 
     return (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            {/* Backdrop */}
             <div
                 onClick={onClose}
                 className="absolute inset-0 bg-black/90 backdrop-blur-xl transition-opacity"
             />
 
-            {/* Content Container */}
-            <div className={`relative w-full max-w-5xl bg-[#0f0f1a] border border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[85vh]`}>
-
-                {/* Mode: Player Active */}
+            <div className="relative w-full max-w-5xl bg-[#0f0f1a] border border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col h-[85vh]">
                 {activeStream ? (
                     renderPlayer()
                 ) : (
-                    /* Mode: Stream List */
                     <>
-                        {/* Header */}
                         <div className="p-8 border-b border-white/5 bg-gradient-to-r from-cyan-900/20 to-blue-900/20 flex justify-between items-start">
                             <div>
                                 <div className="flex items-center gap-3 mb-2">
@@ -146,15 +370,36 @@ export const AddonStreamDialog: React.FC<AddonStreamDialogProps> = ({
                                     <h2 className="text-2xl font-black uppercase italic tracking-tight text-white">{title}</h2>
                                 </div>
                                 <p className="text-sm text-white/40 pl-1">
-                                    Selecione uma fonte de transmissão via Addon
+                                    Selecione uma fonte de transmissao via addon
                                 </p>
+                                {!loading && !error && rankedStreams.length > 0 && (
+                                    <div className="flex flex-wrap gap-2 mt-4 pl-1">
+                                        <span className="text-[10px] uppercase font-black tracking-widest text-white/70 bg-white/5 px-3 py-1 rounded-full">
+                                            {streamSummary.total} fontes visiveis
+                                        </span>
+                                        {streamSummary.portugueseAudio > 0 && (
+                                            <span className="text-[10px] uppercase font-black tracking-widest text-emerald-300 bg-emerald-500/15 px-3 py-1 rounded-full">
+                                                {streamSummary.portugueseAudio} com audio PT-BR
+                                            </span>
+                                        )}
+                                        {streamSummary.portugueseSubtitle > 0 && (
+                                            <span className="text-[10px] uppercase font-black tracking-widest text-sky-300 bg-sky-500/15 px-3 py-1 rounded-full">
+                                                {streamSummary.portugueseSubtitle} com legenda PT
+                                            </span>
+                                        )}
+                                        {streamSummary.p2pCount > 0 && (
+                                            <span className="text-[10px] uppercase font-black tracking-widest text-violet-300 bg-violet-500/15 px-3 py-1 rounded-full">
+                                                {streamSummary.p2pCount} P2P
+                                            </span>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                             <button onClick={onClose} className="p-2 text-white/40 hover:text-white transition-colors">
                                 <X size={24} />
                             </button>
                         </div>
 
-                        {/* List Body */}
                         <div className="flex-1 overflow-y-auto custom-scrollbar p-8">
                             {loading ? (
                                 <div className="flex flex-col items-center justify-center h-full space-y-4 opacity-50">
@@ -172,52 +417,122 @@ export const AddonStreamDialog: React.FC<AddonStreamDialogProps> = ({
                                         Tentar Novamente
                                     </button>
                                 </div>
-                            ) : streams.length === 0 ? (
+                            ) : rankedStreams.length === 0 ? (
                                 <div className="flex flex-col items-center justify-center h-full space-y-4 opacity-30">
                                     <MonitorPlay className="w-16 h-16 text-white" />
                                     <p className="text-sm uppercase tracking-widest text-white">Nenhum stream encontrado</p>
-                                    <p className="text-xs text-white/50 max-w-xs text-center">Tente instalar mais addons na página de gerenciamento.</p>
+                                    <p className="text-xs text-white/50 max-w-xs text-center">Os addons ativos nao retornaram fontes utilizaveis para este item.</p>
                                 </div>
                             ) : (
-                                <div className="grid grid-cols-1 gap-3">
-                                    {streams.map((stream, idx) => (
+                                <div className="space-y-4">
+                                    <div className="space-y-3">
+                                        <div className="relative">
+                                            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
+                                            <input
+                                                value={streamQuery}
+                                                onChange={(e) => setStreamQuery(e.target.value)}
+                                                placeholder="Pesquisar dentro das fontes..."
+                                                className="w-full rounded-xl bg-white/5 border border-white/10 px-10 py-3 text-sm text-white placeholder:text-white/30 outline-none focus:border-cyan-500/40"
+                                            />
+                                        </div>
+                                        <div className="flex flex-wrap gap-2">
+                                            <button
+                                                onClick={() => setSelectedAddon('all')}
+                                                className={`px-3 py-1.5 rounded-lg text-[10px] uppercase font-black tracking-widest transition-colors ${selectedAddon === 'all' ? 'bg-cyan-500 text-black' : 'bg-white/5 text-white/60 hover:bg-white/10'}`}
+                                            >
+                                                Todos ({rankedStreams.length})
+                                            </button>
+                                            {addonOptions.map((addon) => (
+                                                <button
+                                                    key={addon.name}
+                                                    onClick={() => setSelectedAddon(addon.name)}
+                                                    className={`px-3 py-1.5 rounded-lg text-[10px] uppercase font-black tracking-widest transition-colors ${selectedAddon === addon.name ? 'bg-cyan-500 text-black' : 'bg-white/5 text-white/60 hover:bg-white/10'}`}
+                                                >
+                                                    {addon.name} ({addon.count})
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {filteredStreams.length === 0 ? (
+                                        <div className="flex flex-col items-center justify-center py-16 space-y-3 opacity-40">
+                                            <MonitorPlay className="w-12 h-12 text-white" />
+                                            <p className="text-sm uppercase tracking-widest text-white">Nenhuma fonte bateu com esse filtro</p>
+                                        </div>
+                                    ) : (
+                                        <div className="grid grid-cols-1 gap-3">
+                                    {filteredStreams.map((stream, idx) => (
                                         <motion.div
-                                            key={idx}
+                                            key={`${stream.addonName || 'addon'}-${idx}`}
                                             initial={{ opacity: 0, x: -20 }}
                                             animate={{ opacity: 1, x: 0 }}
                                             transition={{ delay: idx * 0.05 }}
-                                            onClick={() => handleStreamSelect(stream)}
-                                            className="group flex items-center justify-between p-4 bg-white/5 hover:bg-white/10 border border-white/5 hover:border-cyan-500/30 rounded-xl cursor-pointer transition-all"
+                                            className="group flex items-center justify-between p-4 bg-white/5 hover:bg-white/10 border border-white/5 hover:border-cyan-500/30 rounded-xl transition-all"
                                         >
-                                            <div className="flex items-center gap-4">
+                                            <div className="flex items-center gap-4 cursor-pointer flex-1 min-w-0" onClick={() => handleStreamSelect(stream)}>
                                                 <div className="w-10 h-10 rounded-full bg-black/40 flex items-center justify-center text-cyan-500 group-hover:scale-110 transition-transform shadow-lg">
                                                     <Play size={16} fill="currentColor" />
                                                 </div>
-                                                <div>
+                                                <div className="min-w-0">
                                                     <h4 className="text-sm font-bold text-white group-hover:text-cyan-400 line-clamp-1">
                                                         {stream.title || stream.name || `Stream ${idx + 1}`}
                                                     </h4>
-                                                    <div className="flex items-center gap-2 mt-1">
+                                                    <div className="flex items-center gap-2 mt-1 flex-wrap">
                                                         <span className="text-[10px] uppercase font-black tracking-widest text-white/30 bg-white/5 px-2 py-0.5 rounded-sm">
                                                             {stream.addonName || 'Unknown Addon'}
                                                         </span>
-                                                        {stream.name && stream.name !== stream.title && (
-                                                            <span className="text-[10px] text-white/40">{stream.name}</span>
+                                                        {normalizeText(stream.addonName).includes('brazuca') && (getPortugueseAudioScore(stream) > 0 || getPortugueseSubtitleScore(stream) > 0) && (
+                                                            <span className="text-[9px] uppercase font-black text-fuchsia-300 bg-fuchsia-500/15 px-2 py-0.5 rounded-sm">
+                                                                BR em destaque
+                                                            </span>
+                                                        )}
+                                                        {getPortugueseAudioScore(stream) > 0 && (
+                                                            <span className="text-[9px] uppercase font-black text-emerald-300 bg-emerald-500/15 px-2 py-0.5 rounded-sm">
+                                                                Audio PT-BR
+                                                            </span>
+                                                        )}
+                                                        {getPortugueseSubtitleScore(stream) > 0 && (
+                                                            <span className="text-[9px] uppercase font-black text-sky-300 bg-sky-500/15 px-2 py-0.5 rounded-sm">
+                                                                Legenda PT
+                                                            </span>
+                                                        )}
+                                                        {getQualityLabel(stream) && (
+                                                            <span className="text-[9px] uppercase font-black text-yellow-300 bg-yellow-500/15 px-2 py-0.5 rounded-sm">
+                                                                {getQualityLabel(stream)}
+                                                            </span>
+                                                        )}
+                                                        {(stream.infoHash || stream.url?.startsWith('magnet')) && (
+                                                            <span className="text-[9px] uppercase font-bold text-violet-400">P2P</span>
+                                                        )}
+                                                        {stream.url && !stream.url.startsWith('magnet:') && !stream.infoHash && (
+                                                            <span className="text-[9px] uppercase font-bold text-green-400">Direct</span>
                                                         )}
                                                     </div>
                                                 </div>
                                             </div>
 
-                                            <div className="flex items-center gap-4 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                {stream.url && !stream.url.startsWith('magnet') && (
-                                                    <span className="text-[9px] uppercase font-bold text-green-500">Direct Play</span>
+                                            <div className="flex items-center gap-2 ml-4">
+                                                {onMaterializeStream && (stream.infoHash || stream.url?.startsWith('magnet:')) && (
+                                                    <button
+                                                        onClick={() => handleMaterialize(stream)}
+                                                        disabled={materializingKey === (stream.infoHash || stream.url || stream.title || stream.name || 'stream')}
+                                                        className="px-3 py-2 rounded-lg bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 transition-colors text-[10px] uppercase font-bold tracking-widest disabled:opacity-50"
+                                                    >
+                                                        {materializingKey === (stream.infoHash || stream.url || stream.title || stream.name || 'stream') ? (
+                                                            <span className="inline-flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" />Fila</span>
+                                                        ) : (
+                                                            <span className="inline-flex items-center gap-1"><Download className="w-3 h-3" />Biblioteca</span>
+                                                        )}
+                                                    </button>
                                                 )}
-                                                {(stream.infoHash || stream.url?.startsWith('magnet')) && (
-                                                    <span className="text-[9px] uppercase font-bold text-violet-500">P2P Stream</span>
-                                                )}
+                                                <div className="opacity-0 group-hover:opacity-100 transition-opacity text-[9px] uppercase font-bold text-cyan-400">
+                                                    Abrir
+                                                </div>
                                             </div>
                                         </motion.div>
                                     ))}
+                                </div>
+                                    )}
                                 </div>
                             )}
                         </div>

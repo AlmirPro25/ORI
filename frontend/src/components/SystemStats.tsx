@@ -184,7 +184,7 @@ export const SystemStats: React.FC = () => {
         const fetchStats = async () => {
             try {
                 // V2 Stats (fonte de verdade)
-                const statsRes = await apiClient.get('/downloads/stats');
+                const statsRes = await apiClient.get('/downloads/stats/system');
                 setStats(statsRes.data);
 
                 // Prediction accuracy (pode falhar se não há dados)

@@ -5,7 +5,7 @@
 
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Play, Download, Clock, CheckCircle, AlertCircle, Loader2, Film, ChevronRight } from 'lucide-react';
+import { Play, Download, Clock, CheckCircle, AlertCircle, Loader2, Film, ChevronRight, Radio } from 'lucide-react';
 import { Episode } from '@/types/series';
 import SeriesService from '@/services/api/series.service';
 import { useNavigate } from 'react-router-dom';
@@ -13,6 +13,7 @@ import { useNavigate } from 'react-router-dom';
 interface EpisodeCardProps {
     episode: Episode;
     onDownload?: () => void;
+    onOpenAddons?: (episode: Episode) => void;
 }
 
 const statusConfig: Record<string, { color: string; bgColor: string; textColor: string; Icon: any; label: string }> = {
@@ -24,7 +25,7 @@ const statusConfig: Record<string, { color: string; bgColor: string; textColor: 
     FAILED: { color: 'red', bgColor: 'bg-red-500/15', textColor: 'text-red-400', Icon: AlertCircle, label: 'Erro' },
 };
 
-export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, onDownload }) => {
+export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, onDownload, onOpenAddons }) => {
     const navigate = useNavigate();
     const [downloading, setDownloading] = useState(false);
     const config = statusConfig[episode.status] || statusConfig.NOT_DOWNLOADED;
@@ -145,6 +146,16 @@ export const EpisodeCard: React.FC<EpisodeCardProps> = ({ episode, onDownload })
                                 <Download className="w-3 h-3" />
                             )}
                             {episode.status === 'FAILED' ? 'Tentar Novamente' : 'Baixar'}
+                        </button>
+                    )}
+
+                    {onOpenAddons && (
+                        <button
+                            onClick={() => onOpenAddons(episode)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 text-xs font-semibold hover:bg-cyan-500/20 transition-colors"
+                        >
+                            <Radio className="w-3 h-3" />
+                            Addons
                         </button>
                     )}
 

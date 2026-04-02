@@ -39,7 +39,19 @@ export const ContinueWatching: React.FC = () => {
         fetchHistory();
     }, [user]);
 
-    if (loading || history.length === 0) return null;
+    const resumableHistory = React.useMemo(() => {
+        return history.filter((item) => {
+            const duration = Number(item.video.duration || 0);
+            const lastTime = Number(item.lastTime || 0);
+
+            if (lastTime < 60) return false;
+            if (duration > 0 && lastTime >= duration * 0.92) return false;
+
+            return true;
+        });
+    }, [history]);
+
+    if (loading || resumableHistory.length === 0) return null;
 
     return (
         <div className="px-6 md:px-16 py-12 relative overflow-hidden">
@@ -56,7 +68,7 @@ export const ContinueWatching: React.FC = () => {
             </div>
 
             <div className="flex gap-8 overflow-x-auto pb-8 no-scrollbar snap-x snap-mandatory">
-                {history.map((item, idx) => (
+                {resumableHistory.map((item, idx) => (
                     <motion.div
                         key={item.id}
                         initial={{ opacity: 0, scale: 0.9, x: 20 }}

@@ -39,6 +39,7 @@ import ffmpeg from 'fluent-ffmpeg';
 import ffmpegPath from '@ffmpeg-installer/ffmpeg';
 import { updateSwarmHealth } from './intelligence-engine';
 import { SystemTelemetry } from './services/system-telemetry';
+import { AddonService } from './services/addon.service';
 
 const prisma = new PrismaClient();
 ffmpeg.setFfmpegPath(ffmpegPath.path);
@@ -50,6 +51,16 @@ const PROCESSING_INTERVAL = 5000; // 5s
 const PROGRESS_UPDATE_INTERVAL = 2000; // 2s
 const STALL_TIMEOUT_MINUTES = 10; // 🔥 BOMBA 7: Timeout para marcar como STALLED
 const STALL_MIN_PROGRESS = 5; // Progresso mínimo esperado em STALL_TIMEOUT_MINUTES
+const ZERO_PEER_FALLBACK_MINUTES = 2; // Tenta trocar a fonte antes de desistir
+const MAX_ETA_SECONDS = 2147483647; // Limite seguro para INT no banco atual
+const EXTRA_TRACKERS = [
+    'udp://tracker.opentrackr.org:1337/announce',
+    'udp://tracker.openbittorrent.com:6969/announce',
+    'udp://tracker.torrent.eu.org:451/announce',
+    'udp://open.stealth.si:80/announce',
+    'wss://tracker.openwebtorrent.com',
+    'wss://tracker.btorrent.xyz',
+];
 
 // 💣 BOMBA A: Throttling de escrita (só atualiza se mudou significativamente)
 const MIN_PROGRESS_DELTA = 2; // Só atualiza banco se progresso mudou >= 2%
@@ -93,6 +104,7 @@ const lastUpdateCache = new Map<string, { progress: number; timestamp: number }>
 
 // 💣 BOMBA C: Seeds ativos
 const activeSeeds = new Map<string, { torrent: any; startedAt: Date }>();
+const attemptedFallbackHashes = new Map<string, Set<string>>();
 
 // Cliente WebTorrent global (carregado dinamicamente)
 let client: any = null;
@@ -240,7 +252,12 @@ export async function queueDownload(request: DownloadRequest): Promise<{ videoId
 
     // Verificar se já existe na fila
     const existing = await prisma.downloadQueue.findFirst({
-        where: { infoHash }
+        where: {
+            infoHash,
+            ...(request.fileIndex !== undefined && request.fileIndex !== null
+                ? { fileIndex: request.fileIndex }
+                : {}),
+        }
     });
 
     if (existing) {
@@ -533,15 +550,180 @@ async function downloadAndProcess(download: any) {
 
             console.log(`🎬 [Video] Arquivo: ${videoFile.name}`);
 
+            let isFinalizing = false;
+            let progressInterval: NodeJS.Timeout | null = null;
+
+            const getEffectiveProgress = () => {
+                if (download.fileIndex !== undefined && download.fileIndex !== null && videoFile?.length) {
+                    const fileProgress = Number(videoFile.downloaded || 0) / Number(videoFile.length || 1);
+                    return Math.min(1, Math.max(0, fileProgress));
+                }
+
+                return Math.min(1, Math.max(0, Number(torrent.progress || 0)));
+            };
+
+            const isTargetFileReady = async () => {
+                if (!videoFile) return false;
+
+                const fileProgress = getEffectiveProgress();
+                if (fileProgress < 0.999) {
+                    return false;
+                }
+
+                const videoFilePath = path.join(downloadPath, videoFile.path);
+
+                try {
+                    const stats = await fs.stat(videoFilePath);
+                    const expectedSize = Number(videoFile.length || 0);
+                    if (!expectedSize) {
+                        return stats.size > 0;
+                    }
+
+                    return stats.size >= Math.max(expectedSize - 1024, 1);
+                } catch {
+                    return false;
+                }
+            };
+
+            const finalizeDownload = async (reason: string) => {
+                if (isFinalizing) return;
+                isFinalizing = true;
+
+                if (progressInterval) {
+                    clearInterval(progressInterval);
+                }
+
+                console.log(`✅ [Download] Completo: ${videoId} (${reason})`);
+
+                // Atualizar status antes da cópia para refletir pós-download imediato.
+                await prisma.downloadQueue.update({
+                    where: { videoId },
+                    data: {
+                        status: 'PROCESSING',
+                        progress: 100,
+                        peers: torrent.wires.length,
+                        seeds: torrent.wires.filter((w: any) => !w.peerChoking).length,
+                        eta: 0,
+                    }
+                });
+
+                try {
+                    const videoFilePath = path.join(downloadPath, videoFile.path);
+                    const finalVideoPath = path.join(uploadsPath, `${videoId}.mp4`);
+
+                    await fs.copyFile(videoFilePath, finalVideoPath);
+                    console.log(`📁 [File] Copiado: ${finalVideoPath}`);
+
+                    await new Promise<void>((resolveEncode, rejectEncode) => {
+                        encodingQueue.push({
+                            videoId,
+                            inputPath: finalVideoPath,
+                            outputDir: hlsPath,
+                            downloadPath,
+                            resolve: resolveEncode,
+                            reject: rejectEncode
+                        });
+                        processEncodingQueue();
+                    });
+
+                    const queueData = await prisma.downloadQueue.findUnique({
+                        where: { videoId }
+                    });
+
+                    const processingTime = queueData?.startedAt
+                        ? Math.round((Date.now() - queueData.startedAt.getTime()) / 1000)
+                        : null;
+
+                    await prisma.downloadQueue.update({
+                        where: { videoId },
+                        data: {
+                            status: 'COMPLETED',
+                            completedAt: new Date(),
+                            processingTime,
+                            progress: 100,
+                            eta: 0,
+                        }
+                    });
+
+                    await prisma.video.update({
+                        where: { id: videoId },
+                        data: {
+                            status: 'READY',
+                            originalFilename: videoFile.name,
+                            storageKey: finalVideoPath,
+                            hlsPath: path.join('hls', videoId, 'index.m3u8'),
+                            fileSize: Number(videoFile.length || torrent.length || 0) / 1024 / 1024
+                        }
+                    });
+
+                    attemptedFallbackHashes.delete(videoId);
+                    console.log(`🎉 [Complete] Vídeo pronto: ${videoId} (${processingTime}s)`);
+
+                    await cleanupDownloadFolder(downloadPath);
+
+                    const seedUntil = new Date(Date.now() + SEED_DURATION_MINUTES * 60 * 1000);
+
+                    if (activeSeeds.size < MAX_ACTIVE_SEEDS) {
+                        activeSeeds.set(videoId, { torrent, startedAt: new Date() });
+                        console.log(`🌱 [Seed] Mantendo seed por ${SEED_DURATION_MINUTES} minutos: ${videoId}`);
+
+                        await prisma.seedState.upsert({
+                            where: { videoId },
+                            create: {
+                                videoId,
+                                infoHash: torrent.infoHash,
+                                magnetURI: download.magnetURI,
+                                seedUntil,
+                                isActive: true
+                            },
+                            update: {
+                                seedUntil,
+                                isActive: true
+                            }
+                        });
+
+                        setTimeout(async () => {
+                            const seedInfo = activeSeeds.get(videoId);
+                            if (seedInfo) {
+                                seedInfo.torrent.destroy();
+                                activeSeeds.delete(videoId);
+
+                                await prisma.seedState.update({
+                                    where: { videoId },
+                                    data: { isActive: false }
+                                }).catch(() => { });
+
+                                console.log(`🛑 [Seed] Finalizado após ${SEED_DURATION_MINUTES}min: ${videoId}`);
+                            }
+                        }, SEED_DURATION_MINUTES * 60 * 1000);
+                    } else {
+                        torrent.destroy();
+                        console.log(`⚠️ [Seed] Slots cheios, destruindo torrent: ${videoId}`);
+                    }
+
+                    activeTorrents.delete(videoId);
+                    lastUpdateCache.delete(videoId);
+
+                    if (processingTime) SystemTelemetry.trackDownloadSuccess(processingTime * 1000);
+
+                    resolve();
+                } catch (err: any) {
+                    reject(err);
+                }
+            };
+
             // 📊 ATUALIZAR PROGRESSO (a cada 2s)
-            const progressInterval = setInterval(async () => {
-                const progress = Math.round(torrent.progress * 100);
+            progressInterval = setInterval(async () => {
+                const progress = Math.round(getEffectiveProgress() * 100);
                 const downloadSpeed = torrent.downloadSpeed / 1024; // KB/s
                 const uploadSpeed = torrent.uploadSpeed / 1024; // KB/s
 
                 // Calcular ETA
-                const remaining = torrent.length * (1 - torrent.progress);
-                const eta = downloadSpeed > 0 ? Math.round(remaining / downloadSpeed / 1024) : null;
+                const remainingBase = download.fileIndex !== undefined && download.fileIndex !== null
+                    ? Number(videoFile.length || torrent.length || 0)
+                    : Number(torrent.length || 0);
+                const remaining = remainingBase * (1 - getEffectiveProgress());
+                const eta = sanitizeEtaSeconds(downloadSpeed > 0 ? (remaining / downloadSpeed / 1024) : null);
 
                 // Contar peers reais (usando wires) - CORREÇÃO do agente
                 const realPeers = torrent.wires.length;
@@ -583,143 +765,23 @@ async function downloadAndProcess(download: any) {
                     `📊 [Progress] ${videoId}: ${progress}% | ` +
                     `↓${(downloadSpeed / 1024).toFixed(2)} MB/s | ` +
                     `↑${(uploadSpeed / 1024).toFixed(2)} MB/s | ` +
-                    `Peers: ${realPeers} | ETA: ${eta ? `${eta}s` : '?'}`
+                    `Peers: ${realPeers} | ETA: ${eta ? `${eta}s` : '?'}` 
                 );
+
+                if (download.fileIndex !== undefined && download.fileIndex !== null && await isTargetFileReady()) {
+                    await finalizeDownload('target-file-ready');
+                }
             }, PROGRESS_UPDATE_INTERVAL);
 
             // ✅ DOWNLOAD COMPLETO
             torrent.on('done', async () => {
-                clearInterval(progressInterval);
-                console.log(`✅ [Download] Completo: ${videoId}`);
-
-                // Atualizar status
-                await prisma.downloadQueue.update({
-                    where: { videoId },
-                    data: {
-                        status: 'PROCESSING',
-                        progress: 100
-                    }
-                });
-
-                try {
-                    // Caminhos
-                    const videoFilePath = path.join(downloadPath, videoFile.path);
-                    const finalVideoPath = path.join(uploadsPath, `${videoId}.mp4`);
-
-                    // BOMBA 3: Copiar assíncrono
-                    await fs.copyFile(videoFilePath, finalVideoPath);
-                    console.log(`📁 [File] Copiado: ${finalVideoPath}`);
-
-                    // 💣 BOMBA B: Adicionar à fila de encoding (event-driven)
-                    await new Promise<void>((resolveEncode, rejectEncode) => {
-                        encodingQueue.push({
-                            videoId,
-                            inputPath: finalVideoPath,
-                            outputDir: hlsPath,
-                            downloadPath,
-                            resolve: resolveEncode,
-                            reject: rejectEncode
-                        });
-                        processEncodingQueue(); // Trigger processing
-                    });
-
-                    // Calcular tempo de processamento
-                    const queueData = await prisma.downloadQueue.findUnique({
-                        where: { videoId }
-                    });
-
-                    const processingTime = queueData?.startedAt
-                        ? Math.round((Date.now() - queueData.startedAt.getTime()) / 1000)
-                        : null;
-
-                    // Atualizar banco (BOMBA 4: fonte de verdade)
-                    await prisma.downloadQueue.update({
-                        where: { videoId },
-                        data: {
-                            status: 'COMPLETED',
-                            completedAt: new Date(),
-                            processingTime
-                        }
-                    });
-
-                    await prisma.video.update({
-                        where: { id: videoId },
-                        data: {
-                            status: 'READY',
-                            originalFilename: videoFile.name,
-                            storageKey: finalVideoPath,
-                            hlsPath: path.join('hls', videoId, 'index.m3u8'),
-                            fileSize: torrent.length / 1024 / 1024 // MB
-                        }
-                    });
-
-                    console.log(`🎉 [Complete] Vídeo pronto: ${videoId} (${processingTime}s)`);
-
-                    // 🔥 BOMBA 6: Limpeza automática de disco
-                    await cleanupDownloadFolder(downloadPath);
-
-                    // � V2.4: Persistir seed state para sobreviver a restarts
-                    const seedUntil = new Date(Date.now() + SEED_DURATION_MINUTES * 60 * 1000);
-
-                    // �💣 BOMBA C: Estratégia de seeding (manter seed por X minutos)
-                    if (activeSeeds.size < MAX_ACTIVE_SEEDS) {
-                        activeSeeds.set(videoId, { torrent, startedAt: new Date() });
-                        console.log(`🌱 [Seed] Mantendo seed por ${SEED_DURATION_MINUTES} minutos: ${videoId}`);
-
-                        // 🔴 V2.4: Persistir no banco
-                        await prisma.seedState.upsert({
-                            where: { videoId },
-                            create: {
-                                videoId,
-                                infoHash: torrent.infoHash,
-                                magnetURI: download.magnetURI,
-                                seedUntil,
-                                isActive: true
-                            },
-                            update: {
-                                seedUntil,
-                                isActive: true
-                            }
-                        });
-
-                        // Agendar destruição do torrent após SEED_DURATION_MINUTES
-                        setTimeout(async () => {
-                            const seedInfo = activeSeeds.get(videoId);
-                            if (seedInfo) {
-                                seedInfo.torrent.destroy();
-                                activeSeeds.delete(videoId);
-
-                                // Marcar como inativo no banco
-                                await prisma.seedState.update({
-                                    where: { videoId },
-                                    data: { isActive: false }
-                                }).catch(() => { });
-
-                                console.log(`🛑 [Seed] Finalizado após ${SEED_DURATION_MINUTES}min: ${videoId}`);
-                            }
-                        }, SEED_DURATION_MINUTES * 60 * 1000);
-                    } else {
-                        // Sem slot de seed disponível, destruir imediatamente
-                        torrent.destroy();
-                        console.log(`⚠️ [Seed] Slots cheios, destruindo torrent: ${videoId}`);
-                    }
-
-                    activeTorrents.delete(videoId);
-
-                    // 🔴 PROBLEMA INVISÍVEL #3: Limpar cache para evitar memory leak
-                    lastUpdateCache.delete(videoId);
-
-                    // 📊 TELEMETRY SUCCESS
-                    if (processingTime) SystemTelemetry.trackDownloadSuccess(processingTime * 1000);
-
-                    resolve();
-                } catch (err: any) {
-                    reject(err);
-                }
+                await finalizeDownload('torrent-done');
             });
 
             torrent.on('error', (err: Error) => {
-                clearInterval(progressInterval);
+                if (progressInterval) {
+                    clearInterval(progressInterval);
+                }
                 reject(err);
             });
         });
@@ -883,6 +945,7 @@ export async function listAllDownloads(status?: string) {
  * 🛑 CANCELA DOWNLOAD
  */
 export async function cancelDownload(videoId: string): Promise<void> {
+    attemptedFallbackHashes.delete(videoId);
     const download = await prisma.downloadQueue.findUnique({
         where: { videoId }
     });
@@ -998,6 +1061,284 @@ function extractInfoHash(magnetURI: string): string {
     return match ? match[1].toLowerCase() : '';
 }
 
+function sanitizeEtaSeconds(eta: number | null): number | null {
+    if (eta === null || !Number.isFinite(eta)) return null;
+    if (eta < 0) return null;
+    return Math.min(Math.round(eta), MAX_ETA_SECONDS);
+}
+
+function normalizeTrackerSources(rawSources: unknown): string[] {
+    const sources = Array.isArray(rawSources) ? rawSources : [];
+    const trackers = new Set<string>();
+
+    for (const source of sources) {
+        const value = String(source || '').trim();
+        if (!value) continue;
+
+        if (value.startsWith('tracker:')) {
+            trackers.add(value.slice('tracker:'.length));
+            continue;
+        }
+
+        if (/^(udp|ws|wss):\/\//i.test(value)) {
+            trackers.add(value);
+        }
+    }
+
+    for (const tracker of EXTRA_TRACKERS) {
+        trackers.add(tracker);
+    }
+
+    return [...trackers];
+}
+
+function buildEnrichedMagnetURI(params: {
+    magnetURI?: string | null;
+    infoHash?: string | null;
+    sources?: unknown;
+}): string | null {
+    const normalizedInfoHash = String(params.infoHash || '').trim().toLowerCase();
+    const baseMagnet = String(params.magnetURI || '').trim();
+    const initialMagnet = baseMagnet || (normalizedInfoHash ? `magnet:?xt=urn:btih:${normalizedInfoHash}` : '');
+
+    if (!initialMagnet.startsWith('magnet:?')) {
+        return null;
+    }
+
+    const parts = initialMagnet.split('&').filter(Boolean);
+    const existingTrackers = new Set<string>();
+
+    for (const part of parts) {
+        if (!part.startsWith('tr=')) continue;
+        try {
+            existingTrackers.add(decodeURIComponent(part.slice(3)));
+        } catch {
+            existingTrackers.add(part.slice(3));
+        }
+    }
+
+    for (const tracker of normalizeTrackerSources(params.sources)) {
+        if (!existingTrackers.has(tracker)) {
+            parts.push(`tr=${encodeURIComponent(tracker)}`);
+            existingTrackers.add(tracker);
+        }
+    }
+
+    return parts.join('&');
+}
+
+function destroyActiveTorrent(videoId: string) {
+    const torrent = activeTorrents.get(videoId);
+    if (!torrent) return;
+
+    try {
+        torrent.destroy();
+    } catch (error: any) {
+        console.warn(`⚠️ [Stall] Falha ao destruir torrent ativo ${videoId}: ${error?.message || error}`);
+    } finally {
+        activeTorrents.delete(videoId);
+    }
+}
+
+function getEpisodeSpecificityScore(stream: any, titleHint: string) {
+    const normalize = (value?: string) =>
+        String(value || '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase();
+
+    const haystack = normalize([
+        stream?.title,
+        stream?.name,
+        stream?.description,
+        stream?.behaviorHints?.filename,
+    ].filter(Boolean).join(' '));
+    const target = normalize(titleHint);
+    const episodeMatch = target.match(/s(\d{2})e(\d{2})/i);
+
+    let score = 0;
+    if (episodeMatch) {
+        const [, season, episode] = episodeMatch;
+        const seasonNum = String(Number(season));
+        const episodeNum = String(Number(episode));
+        const exactEpisodePatterns = [
+            new RegExp(`s${season}e${episode}`),
+            new RegExp(`${seasonNum}x${episodeNum}`),
+            new RegExp(`episodio\\s*${episodeNum}`),
+            new RegExp(`episode\\s*${episodeNum}`),
+        ];
+
+        if (exactEpisodePatterns.some((pattern) => pattern.test(haystack))) {
+            score += 120;
+        }
+
+        if (new RegExp(`e${episode}\\s*[-_]\\s*e?\\d{2}`).test(haystack) || new RegExp(`${seasonNum}x${episodeNum}\\s*[-_]\\s*\\d{1,2}`).test(haystack)) {
+            score -= 60;
+        }
+
+        if (new RegExp(`s${season}(?!e${episode})`).test(haystack) || new RegExp(`season\\s*${seasonNum}`).test(haystack) || new RegExp(`temporada\\s*${seasonNum}`).test(haystack)) {
+            score -= 10;
+        }
+    }
+
+    if (/\bcomplete\b|\bcompleta\b|\btemporada\b|\bseason\b/.test(haystack)) {
+        score -= 20;
+    }
+
+    if (/\bdual\b|\bdublado\b|\bpt-br\b/.test(haystack)) {
+        score += 10;
+    }
+
+    return score;
+}
+
+function getSwarmScore(stream: any) {
+    const haystack = `${stream?.title || ''} ${stream?.name || ''} ${stream?.description || ''}`;
+    const matches = [...haystack.matchAll(/(?:👤|seed(?:s|ers?)?|peer(?:s)?)[^\d]{0,6}(\d{1,5})/gi)];
+    if (!matches.length) return 0;
+
+    return matches.reduce((best, match) => {
+        const value = Number(match[1] || 0);
+        return Number.isFinite(value) ? Math.max(best, value) : best;
+    }, 0);
+}
+
+function parseAttemptedHashesFromError(error?: string | null) {
+    const attempted = new Set<string>();
+    const haystack = String(error || '');
+    const markerMatch = haystack.match(/attempted=([a-f0-9,]+)/i);
+    if (!markerMatch?.[1]) return attempted;
+
+    for (const hash of markerMatch[1].split(',')) {
+        const normalized = String(hash || '').trim().toLowerCase();
+        if (/^[a-f0-9]{40}$/.test(normalized)) {
+            attempted.add(normalized);
+        }
+    }
+
+    return attempted;
+}
+
+function buildFallbackErrorMessage(addonName: string, attemptedHashes: Set<string>) {
+    const serialized = [...attemptedHashes].filter(Boolean).join(',');
+    return `Fallback automatico aplicado via ${addonName}${serialized ? ` | attempted=${serialized}` : ''}`;
+}
+
+function chooseFallbackStream(streams: any[], attemptedInfoHashes: Set<string>, titleHint: string) {
+    return [...streams]
+        .sort((a: any, b: any) => {
+            const specificityDelta = getEpisodeSpecificityScore(b, titleHint) - getEpisodeSpecificityScore(a, titleHint);
+            if (specificityDelta !== 0) return specificityDelta;
+
+            const swarmDelta = getSwarmScore(b) - getSwarmScore(a);
+            if (swarmDelta !== 0) return swarmDelta;
+
+            return 0;
+        })
+        .find((stream: any) => {
+        const candidateMagnet = buildEnrichedMagnetURI({
+            magnetURI: typeof stream?.url === 'string' && stream.url.startsWith('magnet:') ? stream.url : null,
+            infoHash: stream?.infoHash,
+            sources: stream?.sources,
+        });
+
+        const candidateInfoHash = extractInfoHash(candidateMagnet || '') || String(stream?.infoHash || '').toLowerCase();
+        if (!candidateMagnet || !candidateInfoHash) return false;
+        return !attemptedInfoHashes.has(candidateInfoHash);
+    });
+}
+
+async function tryEpisodeFallback(download: any): Promise<boolean> {
+    const episode = await (prisma as any).episode.findFirst({
+        where: { videoId: download.videoId },
+        include: { series: true },
+    });
+
+    if (!episode?.series) {
+        return false;
+    }
+
+    const externalId = episode.series.imdbId || (episode.series.tmdbId ? String(episode.series.tmdbId) : '');
+    if (!externalId) {
+        return false;
+    }
+
+    const streamId = `${externalId}:${episode.seasonNumber}:${episode.episodeNumber}`;
+    const titleHint = `${episode.series.title} S${String(episode.seasonNumber).padStart(2, '0')}E${String(episode.episodeNumber).padStart(2, '0')} ${episode.title || ''}`.trim();
+    const currentInfoHash = String(download.infoHash || extractInfoHash(download.magnetURI) || '').toLowerCase();
+    const persistedAttempts = parseAttemptedHashesFromError(download.error);
+    const attemptedInfoHashes = attemptedFallbackHashes.get(download.videoId) || persistedAttempts;
+    for (const hash of persistedAttempts) {
+        attemptedInfoHashes.add(hash);
+    }
+    if (currentInfoHash) attemptedInfoHashes.add(currentInfoHash);
+    const streams = await AddonService.getStreamsFromAllAddons('series', streamId, { title: titleHint });
+    const fallbackStream = chooseFallbackStream(streams, attemptedInfoHashes, titleHint);
+
+    if (!fallbackStream) {
+        return false;
+    }
+
+    const fallbackMagnet = buildEnrichedMagnetURI({
+        magnetURI: typeof fallbackStream.url === 'string' && fallbackStream.url.startsWith('magnet:') ? fallbackStream.url : null,
+        infoHash: fallbackStream.infoHash,
+        sources: fallbackStream.sources,
+    });
+
+    if (!fallbackMagnet) {
+        return false;
+    }
+
+    const fallbackInfoHash = extractInfoHash(fallbackMagnet) || String(fallbackStream.infoHash || '').toLowerCase();
+    if (fallbackInfoHash) attemptedInfoHashes.add(fallbackInfoHash);
+    attemptedFallbackHashes.set(download.videoId, attemptedInfoHashes);
+    const fallbackFileIndex = Number.isInteger(fallbackStream.fileIdx) ? fallbackStream.fileIdx : download.fileIndex;
+
+    destroyActiveTorrent(download.videoId);
+
+    const downloadPath = path.join(process.cwd(), 'downloads', download.videoId);
+    await fs.rm(downloadPath, { recursive: true, force: true });
+
+    await prisma.downloadQueue.update({
+        where: { id: download.id },
+        data: {
+            magnetURI: fallbackMagnet,
+            infoHash: fallbackInfoHash || null,
+            fileIndex: fallbackFileIndex,
+            status: DownloadState.QUEUED,
+            progress: 0,
+            downloadSpeed: 0,
+            uploadSpeed: 0,
+            peers: 0,
+            seeds: 0,
+            eta: null,
+            startedAt: null,
+            completedAt: null,
+            error: buildFallbackErrorMessage(fallbackStream.addonName || 'addon', attemptedInfoHashes),
+            nextRetryAt: null,
+        }
+    });
+
+    await prisma.video.update({
+        where: { id: download.videoId },
+        data: { status: 'PROCESSING' }
+    });
+
+    await (prisma as any).episode.update({
+        where: { id: episode.id },
+        data: {
+            magnetLink: fallbackMagnet,
+            torrentFileIndex: fallbackFileIndex,
+            status: 'PROCESSING',
+        }
+    });
+
+    lastUpdateCache.delete(download.videoId);
+    console.log(`🔁 [Fallback] ${download.videoId} trocado para ${fallbackStream.addonName || 'addon'} (${fallbackInfoHash || 'sem infoHash'})`);
+    processQueue().catch(err => console.error('❌ [Fallback] Erro ao reprocessar fila:', err));
+    return true;
+}
+
 /**
  * 🚀 INICIA PROCESSADOR DE FILA (chamar no server.ts)
  */
@@ -1085,8 +1426,22 @@ async function cleanupExpiredSeeds(): Promise<void> {
  */
 async function detectStalledDownloads(): Promise<void> {
     const stalledThreshold = new Date(Date.now() - STALL_TIMEOUT_MINUTES * 60 * 1000);
+    const zeroPeerThreshold = new Date(Date.now() - ZERO_PEER_FALLBACK_MINUTES * 60 * 1000);
+    const fallbackCandidates = new Map<string, any>();
 
-    // Buscar downloads que estão DOWNLOADING há muito tempo com pouco progresso
+    const zeroPeerDownloads = await prisma.downloadQueue.findMany({
+        where: {
+            status: 'DOWNLOADING',
+            startedAt: { lt: zeroPeerThreshold },
+            progress: { lte: 0 },
+            peers: { lte: 0 },
+        }
+    });
+
+    for (const download of zeroPeerDownloads) {
+        fallbackCandidates.set(download.id, { ...download, shouldFailIfUnrecoverable: false });
+    }
+
     const potentiallyStalled = await prisma.downloadQueue.findMany({
         where: {
             status: 'DOWNLOADING',
@@ -1096,18 +1451,35 @@ async function detectStalledDownloads(): Promise<void> {
     });
 
     for (const download of potentiallyStalled) {
-        console.log(`⚠️ [Stall] Detectado torrent travado: ${download.videoId}`);
+        fallbackCandidates.set(download.id, { ...download, shouldFailIfUnrecoverable: true });
+    }
 
-        // Destruir torrent se estiver ativo
-        const torrent = activeTorrents.get(download.videoId);
-        if (torrent) {
-            torrent.destroy();
-            activeTorrents.delete(download.videoId);
+    let fallbackRecovered = 0;
+
+    for (const candidate of fallbackCandidates.values()) {
+        console.log(`⚠️ [Stall] Detectado torrent travado: ${candidate.videoId}`);
+
+        try {
+            const recovered = await tryEpisodeFallback(candidate);
+            if (recovered) {
+                fallbackRecovered += 1;
+                continue;
+            }
+        } catch (error: any) {
+            console.warn(`⚠️ [Fallback] Falhou para ${candidate.videoId}: ${error?.message || error}`);
         }
+
+        if (!candidate.shouldFailIfUnrecoverable) {
+            continue;
+        }
+
+        destroyActiveTorrent(candidate.videoId);
+
+        console.log(`⚠️ [Stall] Detectado torrent travado: ${candidate.videoId}`);
 
         // Marcar como STALLED (novo status)
         await prisma.downloadQueue.update({
-            where: { id: download.id },
+            where: { id: candidate.id },
             data: {
                 status: 'FAILED',
                 error: `STALLED: Sem progresso por ${STALL_TIMEOUT_MINUTES} minutos (peers insuficientes)`
@@ -1115,13 +1487,14 @@ async function detectStalledDownloads(): Promise<void> {
         });
 
         await prisma.video.update({
-            where: { id: download.videoId },
+            where: { id: candidate.videoId },
             data: { status: 'FAILED' }
         });
     }
 
-    if (potentiallyStalled.length > 0) {
-        console.log(`🔍 [Stall] ${potentiallyStalled.length} download(s) marcados como STALLED`);
+    const failedCount = [...fallbackCandidates.values()].filter((candidate) => candidate.shouldFailIfUnrecoverable).length - fallbackRecovered;
+    if (fallbackCandidates.size > 0) {
+        console.log(`🔍 [Stall] ${fallbackRecovered} fallback(s) aplicados, ${Math.max(0, failedCount)} download(s) marcados como STALLED`);
     }
 }
 

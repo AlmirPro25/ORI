@@ -1,15 +1,82 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Hls from 'hls.js';
-import { Maximize, Volume2, VolumeX, Play, Pause, Settings, RotateCcw } from 'lucide-react';
+import { Maximize, Volume2, VolumeX, Play, Pause, Settings, RotateCcw, Headphones, Subtitles, Check, PictureInPicture2, Upload } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface PlayerProps {
     hlsUrl: string;
 }
 
+type AudioOption = {
+    id: string;
+    label: string;
+    language: string;
+    index: number;
+    kind: 'hls' | 'native';
+};
+
+type SubtitleOption = {
+    id: string;
+    label: string;
+    language: string;
+    index: number;
+    kind: 'hls' | 'native' | 'local';
+    url?: string;
+};
+
+const normalize = (value?: string | null) =>
+    String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+
+const looksLikeHls = (url: string) => /\.m3u8(\?|$)/i.test(url);
+
+const prettifyLanguage = (value?: string | null) => {
+    const normalized = normalize(value);
+    if (!normalized || normalized === 'und') return 'Idioma não identificado';
+    if (/(pt-br|por|^pt$)/.test(normalized)) return 'Português';
+    if (/(^en$|eng|ingles|english)/.test(normalized)) return 'Inglês';
+    if (/(^es$|spa|espanhol|spanish)/.test(normalized)) return 'Espanhol';
+    if (/(^fr$|fra|french|frances)/.test(normalized)) return 'Francês';
+    if (/(^it$|ita|italian|italiano)/.test(normalized)) return 'Italiano';
+    if (/(^de$|deu|ger|german|alemao)/.test(normalized)) return 'Alemão';
+    if (/(^ja$|jpn|japanese)/.test(normalized)) return 'Japonês';
+    if (/(^ko$|kor|korean)/.test(normalized)) return 'Coreano';
+    return String(value);
+};
+
+const prettifyAudioLabel = (label?: string | null, language?: string | null, index?: number) => {
+    const raw = String(label || '').trim();
+    const normalized = normalize(`${raw} ${language || ''}`);
+    const baseLanguage = prettifyLanguage(language || raw);
+    const tags: string[] = [];
+
+    if (/dublado|dub|dual audio|portugu/.test(normalized) || /(pt-br|por|^pt$)/.test(normalized)) tags.push('Dublado');
+    else if (/original|english|ingles|eng/.test(normalized)) tags.push('Original');
+
+    if (/5\.1|5_1|6ch|surround/.test(normalized)) tags.push('5.1');
+    else if (/2\.0|2ch|stereo/.test(normalized)) tags.push('2.0');
+
+    const suffix = tags.length ? ` (${tags.join(' • ')})` : '';
+    return `${baseLanguage}${suffix}` || raw || `Áudio ${typeof index === 'number' ? index + 1 : ''}`.trim();
+};
+
+const prettifySubtitleLabel = (label?: string | null, language?: string | null, index?: number) => {
+    const raw = String(label || '').trim();
+    const normalized = normalize(`${raw} ${language || ''}`);
+    const baseLanguage = prettifyLanguage(language || raw);
+    const suffix = /sdh|cc|closed caption/.test(normalized) ? ' (CC)' : '';
+    return `Legenda ${baseLanguage}${suffix}` || raw || `Legenda ${typeof index === 'number' ? index + 1 : ''}`.trim();
+};
+
 export const PlayerComponent: React.FC<PlayerProps> = ({ hlsUrl }) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
+    const hlsRef = useRef<Hls | null>(null);
+    const controlsTimeoutRef = useRef<number | null>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
     const [isPlaying, setIsPlaying] = useState(false);
     const [isMuted, setIsMuted] = useState(false);
     const [volume, setVolume] = useState(1);
@@ -17,48 +84,91 @@ export const PlayerComponent: React.FC<PlayerProps> = ({ hlsUrl }) => {
     const [duration, setDuration] = useState(0);
     const [showControls, setShowControls] = useState(true);
     const [isHoveringProgress, setIsHoveringProgress] = useState(false);
-    const controlsTimeoutRef = useRef<any>(null);
+    const [audioOptions, setAudioOptions] = useState<AudioOption[]>([]);
+    const [subtitleOptions, setSubtitleOptions] = useState<SubtitleOption[]>([]);
+    const [selectedAudioId, setSelectedAudioId] = useState<string>('default');
+    const [selectedSubtitleId, setSelectedSubtitleId] = useState<string>('off');
+    const [showSettings, setShowSettings] = useState(false);
+    const [settingsTab, setSettingsTab] = useState<'audio' | 'subtitle'>('audio');
 
-    // Persistência de Volume
+    const isHlsSource = useMemo(() => looksLikeHls(hlsUrl), [hlsUrl]);
+
+    const clearHideControlsTimer = () => {
+        if (controlsTimeoutRef.current) {
+            window.clearTimeout(controlsTimeoutRef.current);
+            controlsTimeoutRef.current = null;
+        }
+    };
+
+    const scheduleHideControls = useCallback(() => {
+        clearHideControlsTimer();
+        controlsTimeoutRef.current = window.setTimeout(() => {
+            if (isPlaying) setShowControls(false);
+        }, 3000);
+    }, [isPlaying]);
+
     useEffect(() => {
         const savedVolume = localStorage.getItem('sf_player_volume');
         if (savedVolume !== null) {
-            const v = parseFloat(savedVolume);
-            setVolume(v);
-            setIsMuted(v === 0);
-            if (videoRef.current) {
-                videoRef.current.volume = v;
-                videoRef.current.muted = v === 0;
-            }
+            const nextVolume = parseFloat(savedVolume);
+            setVolume(nextVolume);
+            setIsMuted(nextVolume === 0);
         }
+    }, []);
+
+    const syncNativeTextTracks = useCallback(() => {
+        const video = videoRef.current;
+        if (!video) return;
+
+        const tracks = Array.from(video.textTracks || []).map((track, index) => ({
+            id: `native-sub-${index}`,
+            label: prettifySubtitleLabel(track.label, track.language, index),
+            language: track.language || 'und',
+            index,
+            kind: 'native' as const,
+        }));
+
+        setSubtitleOptions((previous) => {
+            const locals = previous.filter((item) => item.kind === 'local');
+            return [...tracks, ...locals];
+        });
+    }, []);
+
+    const syncNativeAudioTracks = useCallback(() => {
+        const video = videoRef.current as HTMLVideoElement & {
+            audioTracks?: ArrayLike<{ id?: string; label?: string; language?: string; enabled?: boolean }>;
+        };
+
+        const nativeTracks = video?.audioTracks;
+        if (!nativeTracks || nativeTracks.length === 0) return;
+
+        const options = Array.from({ length: nativeTracks.length }).map((_, index) => {
+            const track = nativeTracks[index];
+            return {
+                id: `native-audio-${index}`,
+                label: prettifyAudioLabel(track?.label, track?.language, index),
+                language: track?.language || 'und',
+                index,
+                kind: 'native' as const,
+            };
+        });
+
+        setAudioOptions(options);
     }, []);
 
     useEffect(() => {
         const video = videoRef.current;
         if (!video) return;
 
+        let cancelled = false;
         let hls: Hls | null = null;
 
-        if (Hls.isSupported()) {
-            hls = new Hls({
-                capLevelToPlayerSize: true,
-                autoStartLoad: true,
-            });
-            hls.loadSource(hlsUrl);
-            hls.attachMedia(video);
-
-            hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                // Auto-play muted para melhor UX
-                video.muted = isMuted;
-                video.volume = volume;
-                video.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
-            });
-        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-            video.src = hlsUrl;
-            video.addEventListener('loadedmetadata', () => {
-                video.play().catch(() => { });
-            });
-        }
+        const applyAutoPlay = () => {
+            if (cancelled) return;
+            video.muted = isMuted;
+            video.volume = volume;
+            video.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+        };
 
         const handleTimeUpdate = () => {
             setCurrentTime(video.currentTime);
@@ -67,16 +177,225 @@ export const PlayerComponent: React.FC<PlayerProps> = ({ hlsUrl }) => {
 
         const handleLoadedMetadata = () => {
             if (video.duration) setDuration(video.duration);
+            syncNativeTextTracks();
+            syncNativeAudioTracks();
         };
+
+        const handlePlay = () => setIsPlaying(true);
+        const handlePause = () => setIsPlaying(false);
 
         video.addEventListener('timeupdate', handleTimeUpdate);
         video.addEventListener('loadedmetadata', handleLoadedMetadata);
-        video.addEventListener('play', () => setIsPlaying(true));
-        video.addEventListener('pause', () => setIsPlaying(false));
+        video.addEventListener('play', handlePlay);
+        video.addEventListener('pause', handlePause);
 
-        // Atalhos de Teclado
+        if (isHlsSource && Hls.isSupported()) {
+            hls = new Hls({
+                capLevelToPlayerSize: true,
+                autoStartLoad: true,
+            });
+            hlsRef.current = hls;
+            hls.loadSource(hlsUrl);
+            hls.attachMedia(video);
+
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                const audio = (hls?.audioTracks || []).map((track, index) => ({
+                    id: `hls-audio-${index}`,
+                    label: prettifyAudioLabel(track.name, track.lang, index),
+                    language: track.lang || 'und',
+                    index,
+                    kind: 'hls' as const,
+                }));
+
+                const subtitles = (hls?.subtitleTracks || []).map((track, index) => ({
+                    id: `hls-sub-${index}`,
+                    label: prettifySubtitleLabel(track.name, track.lang, index),
+                    language: track.lang || 'und',
+                    index,
+                    kind: 'hls' as const,
+                }));
+
+                setAudioOptions(audio);
+                setSubtitleOptions(subtitles);
+                applyAutoPlay();
+            });
+        } else {
+            video.src = hlsUrl;
+            video.load();
+            video.addEventListener('loadedmetadata', applyAutoPlay, { once: true });
+        }
+
+        return () => {
+            cancelled = true;
+            clearHideControlsTimer();
+            if (hls) {
+                hls.destroy();
+                hlsRef.current = null;
+            }
+            video.removeEventListener('timeupdate', handleTimeUpdate);
+            video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+            video.removeEventListener('play', handlePlay);
+            video.removeEventListener('pause', handlePause);
+        };
+    }, [hlsUrl, isHlsSource, isMuted, volume, syncNativeAudioTracks, syncNativeTextTracks]);
+
+    const togglePlay = useCallback(() => {
+        const video = videoRef.current;
+        if (!video) return;
+        if (video.paused) video.play().catch(() => undefined);
+        else video.pause();
+    }, []);
+
+    const toggleMute = useCallback(() => {
+        const video = videoRef.current;
+        if (!video) return;
+
+        const nextMuted = !video.muted;
+        video.muted = nextMuted;
+        setIsMuted(nextMuted);
+        if (nextMuted) {
+            setVolume(0);
+        } else {
+            const restoredVolume = parseFloat(localStorage.getItem('sf_player_volume') || '1') || 1;
+            video.volume = restoredVolume;
+            setVolume(restoredVolume);
+        }
+    }, []);
+
+    const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const nextVolume = parseFloat(e.target.value);
+        const video = videoRef.current;
+        setVolume(nextVolume);
+        if (nextVolume > 0) localStorage.setItem('sf_player_volume', nextVolume.toString());
+        if (video) {
+            video.volume = nextVolume;
+            video.muted = nextVolume === 0;
+        }
+        setIsMuted(nextVolume === 0);
+    };
+
+    const handleSeek = (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+        const position = (clientX - rect.left) / rect.width;
+        if (videoRef.current && duration) {
+            videoRef.current.currentTime = Math.max(0, Math.min(duration, position * duration));
+        }
+    };
+
+    const toggleFullscreen = useCallback(() => {
+        if (!containerRef.current) return;
+        if (!document.fullscreenElement) {
+            containerRef.current.requestFullscreen().catch((err) => console.error(`Erro ao entrar em tela cheia: ${err.message}`));
+        } else {
+            document.exitFullscreen().catch(() => undefined);
+        }
+    }, []);
+
+    const openPictureInPicture = useCallback(async () => {
+        const video = videoRef.current as HTMLVideoElement & {
+            requestPictureInPicture?: () => Promise<unknown>;
+        };
+        if (!video?.requestPictureInPicture) return;
+        try {
+            await video.requestPictureInPicture();
+        } catch (error) {
+            console.warn('Picture-in-picture indisponível:', error);
+        }
+    }, []);
+
+    const handleMouseMove = () => {
+        setShowControls(true);
+        scheduleHideControls();
+    };
+
+    const handleAudioSelect = useCallback((option: AudioOption) => {
+        const video = videoRef.current as HTMLVideoElement & {
+            audioTracks?: ArrayLike<{ enabled?: boolean }>;
+        };
+        if (!video) return;
+
+        if (option.kind === 'hls' && hlsRef.current) {
+            hlsRef.current.audioTrack = option.index;
+        } else if (option.kind === 'native' && video.audioTracks) {
+            for (let i = 0; i < video.audioTracks.length; i += 1) {
+                video.audioTracks[i].enabled = i === option.index;
+            }
+        }
+
+        setSelectedAudioId(option.id);
+    }, []);
+
+    const disableSubtitles = useCallback(() => {
+        const video = videoRef.current;
+        if (!video) return;
+
+        if (hlsRef.current) {
+            hlsRef.current.subtitleTrack = -1;
+        }
+
+        Array.from(video.textTracks || []).forEach((track) => {
+            track.mode = 'disabled';
+        });
+
+        setSelectedSubtitleId('off');
+    }, []);
+
+    const handleSubtitleSelect = useCallback((option: SubtitleOption) => {
+        const video = videoRef.current;
+        if (!video) return;
+
+        if (option.kind === 'hls' && hlsRef.current) {
+            hlsRef.current.subtitleTrack = option.index;
+        } else {
+            Array.from(video.textTracks || []).forEach((track, index) => {
+                track.mode = option.kind === 'native' && index === option.index ? 'showing' : 'disabled';
+            });
+        }
+
+        setSelectedSubtitleId(option.id);
+    }, []);
+
+    const handleLocalSubtitle = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        const video = videoRef.current;
+        if (!file || !video) return;
+
+        const url = URL.createObjectURL(file);
+        const localId = `local-sub-${Date.now()}`;
+        const track = document.createElement('track');
+        track.kind = 'subtitles';
+        track.label = file.name.replace(/\.[^/.]+$/, '');
+        track.srclang = 'pt';
+        track.src = url;
+        track.default = true;
+        video.appendChild(track);
+
+        setSubtitleOptions((previous) => {
+            const next = [
+                ...previous.filter((item) => item.kind !== 'local'),
+                {
+                    id: localId,
+                    label: prettifySubtitleLabel(track.label, 'pt', previous.length),
+                    language: 'pt',
+                    index: previous.length,
+                    kind: 'local' as const,
+                    url,
+                },
+            ];
+            return next;
+        });
+
+        setTimeout(() => {
+            Array.from(video.textTracks || []).forEach((textTrack, index) => {
+                textTrack.mode = index === (video.textTracks.length - 1) ? 'showing' : 'disabled';
+            });
+            setSelectedSubtitleId(localId);
+        }, 50);
+    };
+
+    useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
-            // Ignorar se estiver em um input
             if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
             switch (e.key.toLowerCase()) {
@@ -93,108 +412,55 @@ export const PlayerComponent: React.FC<PlayerProps> = ({ hlsUrl }) => {
                     e.preventDefault();
                     toggleMute();
                     break;
+                case 'c':
+                    e.preventDefault();
+                    setSettingsTab('subtitle');
+                    setShowSettings((value) => !value);
+                    break;
+                case 'a':
+                    e.preventDefault();
+                    setSettingsTab('audio');
+                    setShowSettings((value) => !value);
+                    break;
                 case 'arrowright':
                     e.preventDefault();
-                    if (video) video.currentTime += 10;
+                    if (videoRef.current) videoRef.current.currentTime += 10;
                     break;
                 case 'arrowleft':
                     e.preventDefault();
-                    if (video) video.currentTime -= 10;
-                    break;
-                case 'arrowup':
-                    e.preventDefault();
-                    handleVolumeChange({ target: { value: Math.min(1, volume + 0.1).toString() } } as any);
-                    break;
-                case 'arrowdown':
-                    e.preventDefault();
-                    handleVolumeChange({ target: { value: Math.max(0, volume - 0.1).toString() } } as any);
+                    if (videoRef.current) videoRef.current.currentTime -= 10;
                     break;
             }
         };
 
         window.addEventListener('keydown', handleKeyDown);
-
-        return () => {
-            if (hls) hls.destroy();
-            video.removeEventListener('timeupdate', handleTimeUpdate);
-            video.removeEventListener('loadedmetadata', handleLoadedMetadata);
-            window.removeEventListener('keydown', handleKeyDown);
-        };
-    }, [hlsUrl, isMuted, volume]);
-
-    const togglePlay = useCallback(() => {
-        if (!videoRef.current) return;
-        if (videoRef.current.paused) {
-            videoRef.current.play();
-        } else {
-            videoRef.current.pause();
-        }
-    }, []);
-
-    const toggleMute = useCallback(() => {
-        if (!videoRef.current) return;
-        const nextMute = !isMuted;
-        videoRef.current.muted = nextMute;
-        setIsMuted(nextMute);
-        if (nextMute) setVolume(0);
-        else {
-            const v = parseFloat(localStorage.getItem('sf_player_volume') || '1');
-            setVolume(v || 1);
-            if (videoRef.current) videoRef.current.volume = v || 1;
-        }
-    }, [isMuted]);
-
-    const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const val = parseFloat(e.target.value);
-        setVolume(val);
-        if (val > 0) localStorage.setItem('sf_player_volume', val.toString());
-        if (videoRef.current) {
-            videoRef.current.volume = val;
-            videoRef.current.muted = val === 0;
-            setIsMuted(val === 0);
-        }
-    };
-
-    const handleSeek = (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
-        const rect = e.currentTarget.getBoundingClientRect();
-        const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
-        const pos = (clientX - rect.left) / rect.width;
-        if (videoRef.current && duration) {
-            videoRef.current.currentTime = pos * duration;
-        }
-    };
-
-    const toggleFullscreen = useCallback(() => {
-        if (!containerRef.current) return;
-        if (!document.fullscreenElement) {
-            containerRef.current.requestFullscreen().catch(err => {
-                console.error(`Erro ao tentar modo tela cheia: ${err.message}`);
-            });
-        } else {
-            document.exitFullscreen();
-        }
-    }, []);
-
-    const handleMouseMove = () => {
-        setShowControls(true);
-        if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
-        controlsTimeoutRef.current = setTimeout(() => {
-            if (isPlaying) setShowControls(false);
-        }, 3000);
-    };
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [toggleFullscreen, toggleMute, togglePlay]);
 
     const formatTime = (seconds: number) => {
-        if (isNaN(seconds)) return "00:00";
-        const h = Math.floor(seconds / 3600);
-        const m = Math.floor((seconds % 3600) / 60);
-        const s = Math.floor(seconds % 60);
-        if (h > 0) {
-            return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-        }
-        return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        if (isNaN(seconds)) return '00:00';
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = Math.floor(seconds % 60);
+        if (hours > 0) return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        return `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     };
 
     const progressPercent = duration ? (currentTime / duration) * 100 : 0;
+    const preferredAudio = audioOptions.find((option) => /por|pt|pt-br/.test(normalize(option.language)) || /dublado|portugu/.test(normalize(option.label)));
+    const preferredSubtitle = subtitleOptions.find((option) => /por|pt|pt-br/.test(normalize(option.language)) || /legend|portugu/.test(normalize(option.label)));
+
+    useEffect(() => {
+        if (preferredAudio && selectedAudioId === 'default') {
+            handleAudioSelect(preferredAudio);
+        }
+    }, [preferredAudio, selectedAudioId, handleAudioSelect]);
+
+    useEffect(() => {
+        if (preferredSubtitle && selectedSubtitleId === 'off') {
+            handleSubtitleSelect(preferredSubtitle);
+        }
+    }, [preferredSubtitle, selectedSubtitleId, handleSubtitleSelect]);
 
     return (
         <div
@@ -208,53 +474,40 @@ export const PlayerComponent: React.FC<PlayerProps> = ({ hlsUrl }) => {
                 className="w-full h-full object-contain cursor-pointer"
                 onClick={togglePlay}
                 playsInline
+                crossOrigin="anonymous"
             />
 
-            {/* Overlay Gradient Superior (Netflix Style) */}
             <div className={cn(
-                "absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/70 to-transparent transition-opacity duration-300 pointer-events-none",
-                showControls ? "opacity-100" : "opacity-0"
+                'absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/70 to-transparent transition-opacity duration-300 pointer-events-none',
+                showControls ? 'opacity-100' : 'opacity-0'
             )} />
 
-            {/* Custom Controls Container */}
             <div className={cn(
-                "absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent px-4 md:px-8 pb-4 md:pb-8 pt-24 transition-opacity duration-500 flex flex-col gap-4",
-                showControls ? "opacity-100" : "opacity-0"
+                'absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent px-4 md:px-8 pb-4 md:pb-8 pt-24 transition-opacity duration-500 flex flex-col gap-4',
+                showControls ? 'opacity-100' : 'opacity-0'
             )}>
-
-                {/* Progress Bar Container */}
                 <div
                     className="relative w-full h-1 md:h-1.5 group/progress cursor-pointer flex items-center"
                     onMouseDown={handleSeek}
+                    onTouchStart={handleSeek}
                     onMouseEnter={() => setIsHoveringProgress(true)}
                     onMouseLeave={() => setIsHoveringProgress(false)}
                 >
-                    {/* Background Bar */}
                     <div className="absolute inset-0 bg-white/20 rounded-full" />
-
-                    {/* Buffered (Opcional, futuro) */}
-
-                    {/* Elapsed Progress Bar */}
                     <div
                         className="absolute inset-y-0 left-0 bg-primary rounded-full transition-all duration-100"
                         style={{ width: `${progressPercent}%` }}
                     >
-                        {/* Circle Handle */}
                         <div className={cn(
-                            "absolute right-[-6px] top-1/2 -translate-y-1/2 w-3.5 h-3.5 bg-primary rounded-full shadow-[0_0_10px_rgba(var(--primary),0.8)] transition-transform",
-                            isHoveringProgress ? "scale-125" : "scale-0"
+                            'absolute right-[-6px] top-1/2 -translate-y-1/2 w-3.5 h-3.5 bg-primary rounded-full shadow-[0_0_10px_rgba(var(--primary),0.8)] transition-transform',
+                            isHoveringProgress ? 'scale-125' : 'scale-0'
                         )} />
                     </div>
                 </div>
 
-                <div className="flex items-center justify-between">
-                    {/* Left Controls */}
+                <div className="flex items-center justify-between gap-4">
                     <div className="flex items-center gap-4 md:gap-6">
-                        <button
-                            onClick={togglePlay}
-                            className="text-white hover:text-primary transition-transform active:scale-90"
-                            title={isPlaying ? "Pausar" : "Reproduzir"}
-                        >
+                        <button onClick={togglePlay} className="text-white hover:text-primary transition-transform active:scale-90" title={isPlaying ? 'Pausar' : 'Reproduzir'}>
                             {isPlaying ? <Pause size={32} fill="currentColor" /> : <Play size={32} fill="currentColor" />}
                         </button>
 
@@ -262,7 +515,6 @@ export const PlayerComponent: React.FC<PlayerProps> = ({ hlsUrl }) => {
                             <button onClick={toggleMute} className="text-white hover:text-primary transition-colors">
                                 {isMuted || volume === 0 ? <VolumeX size={26} /> : <Volume2 size={26} />}
                             </button>
-
                             <input
                                 type="range"
                                 min="0"
@@ -281,39 +533,180 @@ export const PlayerComponent: React.FC<PlayerProps> = ({ hlsUrl }) => {
                         </div>
                     </div>
 
-                    {/* Right Controls */}
-                    <div className="flex items-center gap-4 md:gap-6">
+                    <div className="flex items-center gap-3 md:gap-4">
                         <button
-                            className="text-white hover:text-primary transition-all active:rotate-45"
-                            title="Configurações"
+                            onClick={() => {
+                                setSettingsTab('audio');
+                                setShowSettings((value) => !value);
+                            }}
+                            className="text-white hover:text-primary transition-colors relative"
+                            title="Trocar áudio"
                         >
-                            <Settings size={22} />
+                            <Headphones size={22} />
+                            {audioOptions.length > 0 && <span className="absolute -top-1 -right-2 text-[9px] bg-green-500 text-black font-black px-1 rounded">{audioOptions.length}</span>}
                         </button>
 
                         <button
-                            onClick={toggleFullscreen}
-                            className="text-white hover:text-primary transition-transform active:scale-110"
-                            title="Tela Cheia"
+                            onClick={() => {
+                                setSettingsTab('subtitle');
+                                setShowSettings((value) => !value);
+                            }}
+                            className="text-white hover:text-primary transition-colors relative"
+                            title="Trocar legenda"
                         >
+                            <Subtitles size={22} />
+                            {subtitleOptions.length > 0 && <span className="absolute -top-1 -right-2 text-[9px] bg-primary text-black font-black px-1 rounded">{subtitleOptions.length}</span>}
+                        </button>
+
+                        <button onClick={() => fileInputRef.current?.click()} className="text-white hover:text-primary transition-colors" title="Carregar legenda local">
+                            <Upload size={20} />
+                        </button>
+
+                        <button onClick={() => setShowSettings((value) => !value)} className="text-white hover:text-primary transition-all active:rotate-45" title="Configurações">
+                            <Settings size={22} />
+                        </button>
+
+                        <button onClick={openPictureInPicture} className="hidden md:block text-white hover:text-primary transition-colors" title="Picture in Picture">
+                            <PictureInPicture2 size={22} />
+                        </button>
+
+                        <button onClick={toggleFullscreen} className="text-white hover:text-primary transition-transform active:scale-110" title="Tela cheia">
                             {document.fullscreenElement ? <RotateCcw size={22} className="rotate-45" /> : <Maximize size={24} />}
                         </button>
                     </div>
                 </div>
             </div>
 
-            {/* Big Center Overlay for Play/Pause State Visual Feedback */}
+            <AnimateSettingsPanel
+                show={showSettings}
+                tab={settingsTab}
+                onChangeTab={setSettingsTab}
+                audioOptions={audioOptions}
+                subtitleOptions={subtitleOptions}
+                selectedAudioId={selectedAudioId}
+                selectedSubtitleId={selectedSubtitleId}
+                onSelectAudio={handleAudioSelect}
+                onSelectSubtitle={handleSubtitleSelect}
+                onDisableSubtitles={disableSubtitles}
+            />
+
+            <input
+                ref={fileInputRef}
+                type="file"
+                accept=".srt,.vtt"
+                className="hidden"
+                onChange={handleLocalSubtitle}
+            />
+
             <div className={cn(
-                "absolute inset-0 flex items-center justify-center pointer-events-none transition-all duration-500",
-                !isPlaying ? "opacity-100 scale-100" : "opacity-0 scale-150"
+                'absolute inset-0 flex items-center justify-center pointer-events-none transition-all duration-500',
+                !isPlaying ? 'opacity-100 scale-100' : 'opacity-0 scale-150'
             )}>
                 <div className="bg-black/40 backdrop-blur-md p-8 rounded-full border border-white/10 glow-primary">
                     <Play size={48} fill="white" className="ml-1 text-white shadow-2xl" />
                 </div>
             </div>
+        </div>
+    );
+};
 
-            {/* Loading Spinner for HLS Buffering */}
-            <div className="absolute inset-x-0 bottom-1/2 translate-y-1/2 flex justify-center pointer-events-none opacity-0 group-[.buffering]:opacity-100">
-                <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+const AnimateSettingsPanel = ({
+    show,
+    tab,
+    onChangeTab,
+    audioOptions,
+    subtitleOptions,
+    selectedAudioId,
+    selectedSubtitleId,
+    onSelectAudio,
+    onSelectSubtitle,
+    onDisableSubtitles,
+}: {
+    show: boolean;
+    tab: 'audio' | 'subtitle';
+    onChangeTab: (tab: 'audio' | 'subtitle') => void;
+    audioOptions: AudioOption[];
+    subtitleOptions: SubtitleOption[];
+    selectedAudioId: string;
+    selectedSubtitleId: string;
+    onSelectAudio: (option: AudioOption) => void;
+    onSelectSubtitle: (option: SubtitleOption) => void;
+    onDisableSubtitles: () => void;
+}) => {
+    if (!show) return null;
+
+    return (
+        <div className="absolute right-4 bottom-24 z-40 w-[320px] max-w-[calc(100vw-2rem)] rounded-3xl border border-white/10 bg-black/90 backdrop-blur-2xl shadow-2xl overflow-hidden">
+            <div className="flex border-b border-white/10">
+                <button
+                    onClick={() => onChangeTab('audio')}
+                    className={cn('flex-1 px-4 py-3 text-xs font-black uppercase tracking-[0.2em]', tab === 'audio' ? 'bg-white/10 text-white' : 'text-white/50')}
+                >
+                    Áudio
+                </button>
+                <button
+                    onClick={() => onChangeTab('subtitle')}
+                    className={cn('flex-1 px-4 py-3 text-xs font-black uppercase tracking-[0.2em]', tab === 'subtitle' ? 'bg-white/10 text-white' : 'text-white/50')}
+                >
+                    Legenda
+                </button>
+            </div>
+
+            <div className="max-h-[320px] overflow-y-auto p-3 space-y-2">
+                {tab === 'audio' ? (
+                    audioOptions.length ? audioOptions.map((option) => (
+                        <button
+                            key={option.id}
+                            onClick={() => onSelectAudio(option)}
+                            className={cn(
+                                'w-full flex items-center justify-between rounded-2xl border px-4 py-3 text-left transition-all',
+                                selectedAudioId === option.id ? 'border-green-500/40 bg-green-500/10 text-green-400' : 'border-white/5 bg-white/5 text-white/70 hover:bg-white/10'
+                            )}
+                        >
+                            <div>
+                                <div className="text-sm font-bold">{option.label}</div>
+                                <div className="text-[10px] uppercase tracking-[0.2em] opacity-50">{prettifyLanguage(option.language)}</div>
+                            </div>
+                            {selectedAudioId === option.id && <Check size={16} />}
+                        </button>
+                    )) : (
+                        <div className="px-3 py-6 text-center text-sm text-white/40">Nenhuma faixa extra detectada agora.</div>
+                    )
+                ) : (
+                    <>
+                        <button
+                            onClick={onDisableSubtitles}
+                            className={cn(
+                                'w-full flex items-center justify-between rounded-2xl border px-4 py-3 text-left transition-all',
+                                selectedSubtitleId === 'off' ? 'border-primary/40 bg-primary/10 text-primary' : 'border-white/5 bg-white/5 text-white/70 hover:bg-white/10'
+                            )}
+                        >
+                            <div>
+                                <div className="text-sm font-bold">Sem legenda</div>
+                                <div className="text-[10px] uppercase tracking-[0.2em] opacity-50">Off</div>
+                            </div>
+                            {selectedSubtitleId === 'off' && <Check size={16} />}
+                        </button>
+                        {subtitleOptions.length ? subtitleOptions.map((option) => (
+                            <button
+                                key={option.id}
+                                onClick={() => onSelectSubtitle(option)}
+                                className={cn(
+                                    'w-full flex items-center justify-between rounded-2xl border px-4 py-3 text-left transition-all',
+                                    selectedSubtitleId === option.id ? 'border-primary/40 bg-primary/10 text-primary' : 'border-white/5 bg-white/5 text-white/70 hover:bg-white/10'
+                                )}
+                            >
+                                <div>
+                                    <div className="text-sm font-bold">{option.label}</div>
+                                    <div className="text-[10px] uppercase tracking-[0.2em] opacity-50">{prettifyLanguage(option.language)}</div>
+                                </div>
+                                {selectedSubtitleId === option.id && <Check size={16} />}
+                            </button>
+                        )) : (
+                            <div className="px-3 py-6 text-center text-sm text-white/40">Nenhuma legenda detectada agora.</div>
+                        )}
+                    </>
+                )}
             </div>
         </div>
     );

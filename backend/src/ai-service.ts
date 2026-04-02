@@ -13,6 +13,7 @@ const logger = winston.createLogger({
 
 // API Key via variável de ambiente
 const apiKey = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
 
 export class AIService {
     private model: any;
@@ -26,7 +27,7 @@ export class AIService {
         }
         const genAI = new GoogleGenerativeAI(apiKey);
         // UPGRADE: Modelo mais capaz para enriquecimento de metadados (Gemini 3.0 Pro)
-        this.model = genAI.getGenerativeModel({ model: "gemini-3.0-pro" });
+        this.model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
         this.isConfigured = true;
         logger.info('[GEMINI] ✅ Serviço de IA inicializado com sucesso.');
     }
@@ -190,6 +191,8 @@ export class AIService {
     private async fallbackEnrichment(title: string, rawDescription: string) {
         const cleanTitle = title
             .replace(/\./g, ' ')
+            .replace(/\[[^\]]*\]/g, ' ')
+            .replace(/\([^\)]*\)/g, ' ')
             .replace(/\d{4}.*$/i, '')
             .replace(/\s+/g, ' ')
             .trim();

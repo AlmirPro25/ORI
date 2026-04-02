@@ -5,6 +5,7 @@ import { UploadForm } from '@/components/UploadForm';
 import { Recommendations } from '@/components/Recommendations';
 import { RecentlyAdded } from '@/components/RecentlyAdded';
 import { ContinueWatching } from '@/components/ContinueWatching';
+import { HouseholdProfileSelector } from '@/components/HouseholdProfileSelector';
 import { Plus, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -17,6 +18,9 @@ export const HomePage: React.FC = () => {
     <div className="min-h-screen bg-background pb-20">
       {/* Hero Central */}
       <HeroSection />
+
+      {/* Perfil da Casa */}
+      <HouseholdProfileSelector />
 
       {/* IPTV TV AO VIVO */}
       <LiveTVRow />

@@ -10,9 +10,111 @@ import { PrismaClient } from '@prisma/client';
 import { episodeParser } from '../services/episode-parser';
 import { DownloadScheduler } from '../services/download-scheduler';
 import { TorrentExplorer } from '../services/torrent-explorer';
+import { queueDownload } from '../torrent-downloader-v2';
 
 const prisma = new PrismaClient();
 const router = Router();
+const DEFAULT_TRACKERS = [
+    'udp://tracker.opentrackr.org:1337/announce',
+    'udp://tracker.openbittorrent.com:6969/announce',
+    'udp://tracker.torrent.eu.org:451/announce',
+    'udp://open.stealth.si:80/announce',
+    'wss://tracker.openwebtorrent.com',
+    'wss://tracker.btorrent.xyz',
+];
+
+function getEffectiveEpisodeStatus(episode: any) {
+    const videoStatus = episode?.video?.status;
+    if (videoStatus === 'READY') return 'READY';
+    if (videoStatus === 'FAILED') return 'FAILED';
+    if (videoStatus === 'PROCESSING' && episode?.status !== 'READY') return 'PROCESSING';
+    return episode?.status || 'NOT_DOWNLOADED';
+}
+
+function mapEpisodeWithEffectiveStatus(episode: any) {
+    return {
+        ...episode,
+        status: getEffectiveEpisodeStatus(episode),
+    };
+}
+
+async function resolveActorUserId(req: Request): Promise<string> {
+    const directUserId = (req as any).user?.id || (req as any).user?.userId;
+    if (directUserId) return directUserId;
+
+    const fallbackUser = await prisma.user.findFirst({
+        orderBy: { createdAt: 'asc' },
+        select: { id: true },
+    });
+
+    if (!fallbackUser) {
+        throw new Error('Nenhum usuário disponível para vincular o download.');
+    }
+
+    return fallbackUser.id;
+}
+
+function normalizeTrackerSources(rawSources: unknown): string[] {
+    const sources = Array.isArray(rawSources) ? rawSources : [];
+    const trackers = new Set<string>();
+
+    for (const source of sources) {
+        const value = String(source || '').trim();
+        if (!value) continue;
+
+        if (value.startsWith('tracker:')) {
+            trackers.add(value.slice('tracker:'.length));
+            continue;
+        }
+
+        if (/^(udp|ws|wss):\/\//i.test(value)) {
+            trackers.add(value);
+        }
+    }
+
+    for (const tracker of DEFAULT_TRACKERS) {
+        trackers.add(tracker);
+    }
+
+    return [...trackers];
+}
+
+function buildEnrichedMagnetURI(params: {
+    magnetURI?: string | null;
+    infoHash?: string | null;
+    sources?: unknown;
+}): string | null {
+    const normalizedInfoHash = String(params.infoHash || '').trim().toLowerCase();
+    const trackers = normalizeTrackerSources(params.sources);
+    const baseMagnet = String(params.magnetURI || '').trim();
+    const initialMagnet = baseMagnet || (normalizedInfoHash ? `magnet:?xt=urn:btih:${normalizedInfoHash}` : '');
+
+    if (!initialMagnet.startsWith('magnet:?')) {
+        return null;
+    }
+
+    const existingTrackers = new Set<string>();
+    const parts = initialMagnet.split('&').filter(Boolean);
+
+    for (const part of parts) {
+        if (part.startsWith('tr=')) {
+            try {
+                existingTrackers.add(decodeURIComponent(part.slice(3)));
+            } catch {
+                existingTrackers.add(part.slice(3));
+            }
+        }
+    }
+
+    for (const tracker of trackers) {
+        if (!existingTrackers.has(tracker)) {
+            parts.push(`tr=${encodeURIComponent(tracker)}`);
+            existingTrackers.add(tracker);
+        }
+    }
+
+    return parts.join('&');
+}
 
 // ==========================================
 // 📺 SÉRIES
@@ -79,7 +181,16 @@ router.get('/:id', async (req: Request, res: Response) => {
         });
 
         if (!series) return res.status(404).json({ error: 'Series not found' });
-        res.json(series);
+
+        const enrichedSeries = {
+            ...series,
+            seasons: (series.seasons || []).map((season: any) => ({
+                ...season,
+                episodes: (season.episodes || []).map(mapEpisodeWithEffectiveStatus),
+            })),
+        };
+
+        res.json(enrichedSeries);
     } catch (error: any) {
         console.error('❌ [Series] Error getting:', error);
         res.status(500).json({ error: error.message });
@@ -239,7 +350,7 @@ router.get('/:id/episodes', async (req: Request, res: Response) => {
             include: { video: true },
             orderBy: [{ seasonNumber: 'asc' }, { episodeNumber: 'asc' }],
         });
-        res.json(episodes);
+        res.json(episodes.map(mapEpisodeWithEffectiveStatus));
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }
@@ -260,7 +371,7 @@ router.get('/:id/seasons/:seasonNumber/episodes', async (req: Request, res: Resp
             include: { video: true },
             orderBy: { episodeNumber: 'asc' },
         });
-        res.json(episodes);
+        res.json(episodes.map(mapEpisodeWithEffectiveStatus));
     } catch (error: any) {
         res.status(500).json({ error: error.message });
     }
@@ -384,8 +495,99 @@ router.get('/episodes/:id', async (req: Request, res: Response) => {
             },
         });
         if (!episode) return res.status(404).json({ error: 'Episode not found' });
-        res.json(episode);
+        res.json(mapEpisodeWithEffectiveStatus(episode));
     } catch (error: any) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+router.post('/episodes/:id/materialize', async (req: Request, res: Response) => {
+    try {
+        const { id } = req.params;
+        const { magnetURI, infoHash, fileIndex, filename, title, sources } = req.body || {};
+
+        const episode = await (prisma as any).episode.findUnique({
+            where: { id },
+            include: {
+                series: true,
+                video: true,
+            },
+        });
+
+        if (!episode) {
+            return res.status(404).json({ error: 'Episode not found' });
+        }
+
+        const resolvedMagnet = buildEnrichedMagnetURI({
+            magnetURI:
+                magnetURI ||
+                (typeof infoHash === 'string' && infoHash ? `magnet:?xt=urn:btih:${infoHash}` : null) ||
+                episode.magnetLink,
+            infoHash,
+            sources,
+        });
+
+        if (!resolvedMagnet || typeof resolvedMagnet !== 'string' || !resolvedMagnet.startsWith('magnet:')) {
+            return res.status(400).json({ error: 'Magnet URI invalido para materializacao.' });
+        }
+
+        const actorUserId = await resolveActorUserId(req);
+        const episodeTitle = `${episode.series?.title || 'Serie'} - S${String(episode.seasonNumber).padStart(2, '0')}E${String(episode.episodeNumber).padStart(2, '0')} - ${title || episode.title}`;
+
+        let videoId = episode.videoId;
+        if (!videoId) {
+            const createdVideo = await prisma.video.create({
+                data: {
+                    title: episodeTitle,
+                    description: episode.overview || episode.series?.overview || '',
+                    originalFilename: filename || `${episodeTitle}.mp4`,
+                    status: 'PROCESSING',
+                    userId: actorUserId,
+                    thumbnailPath: episode.stillPath || episode.series?.poster || null,
+                } as any,
+            });
+            videoId = createdVideo.id;
+        } else {
+            await prisma.video.update({
+                where: { id: videoId },
+                data: {
+                    title: episodeTitle,
+                    description: episode.overview || episode.series?.overview || '',
+                    status: 'PROCESSING',
+                    thumbnailPath: episode.stillPath || episode.series?.poster || null,
+                } as any,
+            });
+        }
+
+        const queueResult = await queueDownload({
+            magnetURI: resolvedMagnet,
+            userId: actorUserId,
+            title: episodeTitle,
+            description: episode.overview || episode.series?.overview || '',
+            category: 'Series',
+            priority: 90,
+            fileIndex: Number.isInteger(fileIndex) ? fileIndex : undefined,
+            videoId,
+        });
+
+        await (prisma as any).episode.update({
+            where: { id },
+            data: {
+                videoId: queueResult.videoId,
+                magnetLink: resolvedMagnet,
+                torrentFileIndex: Number.isInteger(fileIndex) ? fileIndex : episode.torrentFileIndex,
+                status: 'PROCESSING',
+            },
+        });
+
+        res.status(202).json({
+            status: 'PROCESSING',
+            videoId: queueResult.videoId,
+            position: queueResult.position,
+            message: 'Materializacao do episodio iniciada.',
+        });
+    } catch (error: any) {
+        console.error('❌ [Episode] Error materializing from addon:', error);
         res.status(500).json({ error: error.message });
     }
 });
