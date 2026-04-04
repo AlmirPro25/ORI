@@ -48,9 +48,9 @@ export class AddonService {
     ];
 
     private static ADDON_PRIORITY: Record<string, number> = {
-        'torrentio': 100,
-        'thepiratebay+': 80,
-        'brazuca torrents': 75,
+        'brazuca torrents': 110,
+        'torrentio': 70,
+        'thepiratebay+': 60,
         'top streaming': 40,
         'streaming catalogs': 30,
         'aiostreams | elfhosted': 10,
@@ -355,6 +355,31 @@ export class AddonService {
         return score;
     }
 
+    private static getPortugueseAffinityBoost(stream: any, addonName: string, preferPortuguese: boolean) {
+        if (!preferPortuguese) return 0;
+
+        const audioScore = this.getPortugueseAudioScore(stream);
+        const subtitleScore = this.getPortugueseSubtitleScore(stream);
+        const hasPortugueseValue = audioScore > 0 || subtitleScore > 0;
+        const normalizedAddon = this.normalizeText(addonName);
+
+        if (normalizedAddon.includes('brazuca')) {
+            return hasPortugueseValue ? 55 : 12;
+        }
+
+        if (normalizedAddon.includes('torrentio')) {
+            if (audioScore > 0) return 18;
+            if (subtitleScore > 0) return 8;
+            return -35;
+        }
+
+        if (normalizedAddon.includes('top streaming')) {
+            return hasPortugueseValue ? 14 : 0;
+        }
+
+        return hasPortugueseValue ? 8 : 0;
+    }
+
     private static isRateLimited(error: any) {
         const status = error?.response?.status;
         const message = String(error?.response?.data || error?.message || '');
@@ -515,8 +540,8 @@ export class AddonService {
                     const portugueseAffinity = Number(tasteProfile.languageSignals?.['audio-pt-br'] || 0)
                         + Number(tasteProfile.languageSignals?.dubbed || 0);
                     const subtitleAffinity = Number(tasteProfile.languageSignals?.['subtitle-pt-br'] || 0);
-                    const addonFamilyBoost = addonName.includes('brazuca') && portugueseAffinity > 1 ? 35
-                        : addonName.includes('torrentio') && wins > 0 ? 16
+                    const addonFamilyBoost = addonName.includes('brazuca') && portugueseAffinity > 1 ? 42
+                        : addonName.includes('torrentio') && wins > 0 && portugueseAudio > 0 ? 10
                         : 0;
 
                     return addonFamilyBoost
@@ -534,10 +559,12 @@ export class AddonService {
                 if (aPersonalized !== bPersonalized) return bPersonalized - aPersonalized;
 
                 const aPriority = (this.ADDON_PRIORITY[aName] || 0)
-                    + (preferPortuguese && aName.includes('brazuca') ? 35 : 0)
+                    + this.getPortugueseAffinityBoost(a, aName, preferPortuguese)
+                    + (preferPortuguese && aName.includes('brazuca') && aPortugueseAudio > 0 ? 35 : 0)
                     + (preferPortuguese ? Math.min(aPortugueseAudio, 60) : 0);
                 const bPriority = (this.ADDON_PRIORITY[bName] || 0)
-                    + (preferPortuguese && bName.includes('brazuca') ? 35 : 0)
+                    + this.getPortugueseAffinityBoost(b, bName, preferPortuguese)
+                    + (preferPortuguese && bName.includes('brazuca') && bPortugueseAudio > 0 ? 35 : 0)
                     + (preferPortuguese ? Math.min(bPortugueseAudio, 60) : 0);
 
                 if (aPriority !== bPriority) return bPriority - aPriority;

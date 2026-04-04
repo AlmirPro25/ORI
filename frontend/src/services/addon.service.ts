@@ -27,9 +27,14 @@ class AddonService {
         await axios.delete(`/addons/${id}`);
     }
 
-    async getStreams(type: string, id: string, title?: string) {
+    async getStreams(type: string, id: string, title?: string, preferences?: { preferPortugueseAudio?: boolean; acceptPortugueseSubtitles?: boolean; userId?: string }) {
         const response = await axios.get(`/addons/streams/${type}/${id}`, {
-            params: title ? { title } : undefined,
+            params: {
+                ...(title ? { title } : {}),
+                ...(preferences?.preferPortugueseAudio !== undefined ? { preferPortugueseAudio: preferences.preferPortugueseAudio } : {}),
+                ...(preferences?.acceptPortugueseSubtitles !== undefined ? { acceptPortugueseSubtitles: preferences.acceptPortugueseSubtitles } : {}),
+                ...(preferences?.userId ? { userId: preferences.userId } : {}),
+            },
         });
         return response.data;
     }

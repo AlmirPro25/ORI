@@ -16,6 +16,22 @@ import { useDiscoveryFeed } from '@/hooks/useDiscovery';
 import SeriesService from '@/services/api/series.service';
 import { Series } from '@/types/series';
 
+const getSeriesDiscoveryReadiness = (item?: any) => {
+    const score = Number(item?.clickReadyScore || 0);
+    const trustBoost = item?.arconteTrustLabel ? 12 : 0;
+    const radarBoost = item?.isCatalogBoosted ? 8 : 0;
+    return score + trustBoost + radarBoost;
+};
+
+const hasPortugueseSeriesValue = (item?: any) => {
+    const haystack = `${item?.title || ''} ${(item?.genres || '')}`.toLowerCase();
+    return Boolean(
+        item?.isPortuguese ||
+        item?.isDubbed ||
+        /dublado|dual audio|pt-br|portugues|legendado/.test(haystack)
+    );
+};
+
 // ==========================================
 // SERIES CARD COMPONENT
 // ==========================================
@@ -252,6 +268,22 @@ export const SeriesPage: React.FC = () => {
     const { feed } = useDiscoveryFeed();
     const [searchQuery, setSearchQuery] = useState('');
     const [showAddModal, setShowAddModal] = useState(false);
+    const discoverySeriesMeta = React.useMemo(() => {
+        return new Map(
+            (feed?.series || [])
+                .filter((item) => item.kind === 'series')
+                .map((item) => [
+                    item.id,
+                    {
+                        clickReadyScore: item.clickReadyScore,
+                        arconteTrustLabel: item.arconteTrustLabel,
+                        isCatalogBoosted: item.isCatalogBoosted,
+                        isPortuguese: item.isPortuguese,
+                        isDubbed: item.isDubbed,
+                    },
+                ])
+        );
+    }, [feed]);
 
     const filteredSeries = React.useMemo(() => {
         const portugueseSeries = new Set(
@@ -287,6 +319,19 @@ export const SeriesPage: React.FC = () => {
             s.genres?.toLowerCase().includes(q)
         );
     }, [series, searchQuery, feed]);
+    const portugueseForYouSeries = React.useMemo(() => {
+        return [...filteredSeries]
+            .filter((item) => {
+                const meta = discoverySeriesMeta.get(item.id);
+                return hasPortugueseSeriesValue({ ...item, ...meta }) && getSeriesDiscoveryReadiness(meta) >= 25;
+            })
+            .sort((a, b) => {
+                const metaA = discoverySeriesMeta.get(a.id);
+                const metaB = discoverySeriesMeta.get(b.id);
+                return getSeriesDiscoveryReadiness(metaB) - getSeriesDiscoveryReadiness(metaA);
+            })
+            .slice(0, 8);
+    }, [filteredSeries, discoverySeriesMeta]);
 
     if (loading) {
         return (
@@ -347,6 +392,30 @@ export const SeriesPage: React.FC = () => {
                 </motion.div>
 
                 {/* Series Grid */}
+                {portugueseForYouSeries.length > 0 && !searchQuery && (
+                    <div className="space-y-5">
+                        <div className="flex items-center gap-4">
+                            <div className="p-3 bg-cyan-400/10 rounded-2xl border border-cyan-400/20">
+                                <Sparkles className="w-5 h-5 text-cyan-300 animate-pulse" />
+                            </div>
+                            <div>
+                                <h2 className="text-2xl font-black text-white tracking-tight uppercase italic">
+                                    Series em portugues para voce
+                                </h2>
+                                <p className="text-[10px] text-cyan-200/70 font-black uppercase tracking-[0.35em] mt-1">
+                                    Priorizadas pelo Arconte para a casa
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-8 gap-4">
+                            {portugueseForYouSeries.map((s, idx) => (
+                                <SeriesCard key={`pt-${s.id}`} series={s} index={idx} />
+                            ))}
+                        </div>
+                    </div>
+                )}
+
                 {filteredSeries.length > 0 ? (
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-5">
                         {filteredSeries.map((s, idx) => (

@@ -75,7 +75,14 @@ export const useVideo = (id: string | undefined) => {
       VideoService.getById(video.id)
         .then(updated => {
           // Apenas atualiza o estado se houver mudança de status
-          if (updated.status !== video.status) {
+          const hasRelevantChange =
+            updated.status !== video.status ||
+            updated.hlsPath !== video.hlsPath ||
+            updated.storageKey !== video.storageKey ||
+            updated.thumbnailPath !== video.thumbnailPath ||
+            updated.updatedAt !== video.updatedAt;
+
+          if (hasRelevantChange) {
             setVideo(updated);
           }
         })

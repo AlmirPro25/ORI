@@ -77,20 +77,9 @@ const getRadarPortugueseSubtitleScore = (stream: AddonRadarStream) => {
     return 0;
 };
 
-const getRadarAvailability = (stream: AddonRadarStream) => {
-    const raw = `${stream.title || ''} ${stream.name || ''} ${stream.description || ''}`;
-    const peersMatch = raw.match(/(?:ðŸ‘¤|peers?)[^\d]{0,6}(\d{1,5})/i);
-    const seedsMatch = raw.match(/seed(?:s|ers?)?[^\d]{0,6}(\d{1,5})/i);
-    const swarmMatches = [...raw.matchAll(/(?:ðŸ‘¤|seed(?:s|ers?)?|peer(?:s)?)[^\d]{0,6}(\d{1,5})/gi)];
-    const swarm = swarmMatches.reduce((best, match) => Math.max(best, Number(match[1] || 0)), 0);
-    const peers = peersMatch ? Number(peersMatch[1]) : 0;
-    const seeds = seedsMatch ? Number(seedsMatch[1]) : 0;
-
-    return seeds * 4 + peers * 2 + swarm;
-};
-
 export const VideoDetailsPage: React.FC = () => {
     const [streamDialog, setStreamDialog] = useState(false);
+    const [streamDialogManualMode, setStreamDialogManualMode] = useState(false);
     const { id } = useParams<{ id: string }>();
     const { video, loading: videoLoading, error } = useVideo(id);
     const { videos: allVideos } = useVideoFeed();
@@ -177,7 +166,10 @@ export const VideoDetailsPage: React.FC = () => {
                 if (cancelled) return;
 
                 const streams = Array.isArray(result) ? result as AddonRadarStream[] : Array.isArray(result?.streams) ? result.streams as AddonRadarStream[] : [];
-                const best = streams.find((stream) => !!(stream.url || stream.infoHash));
+                const playableStreams = streams.filter((stream) => !!(stream.url || stream.infoHash));
+                const bestPortugueseAudio = playableStreams.find((stream) => getRadarPortugueseAudioScore(stream) > 0);
+                const bestPortugueseSubtitle = playableStreams.find((stream) => getRadarPortugueseSubtitleScore(stream) > 0);
+                const best = bestPortugueseAudio || bestPortugueseSubtitle || playableStreams[0];
 
                 if (!best) {
                     setTrustedSourceHint(null);
@@ -190,10 +182,9 @@ export const VideoDetailsPage: React.FC = () => {
                 const trustLevel = best.arconteSignal?.trustLevel;
                 const ptAudio = getRadarPortugueseAudioScore(best);
                 const ptSubtitle = getRadarPortugueseSubtitleScore(best);
-                const availability = getRadarAvailability(best);
                 const addonName = best.addonName || 'Addon Radar';
 
-                if (trustLevel === 'high' && (ptAudio > 0 || availability >= 40)) {
+                if (trustLevel === 'high' && ptAudio > 0) {
                     setTrustedSourceHint({
                         label: best.arconteSignal?.label || 'Arconte encontrou uma fonte confiavel para assistir agora',
                         tone: 'emerald',
@@ -202,7 +193,7 @@ export const VideoDetailsPage: React.FC = () => {
                     return;
                 }
 
-                if (trustLevel === 'medium' || ptSubtitle > 0 || availability >= 25) {
+                if (ptSubtitle > 0 || (trustLevel === 'medium' && ptAudio > 0)) {
                     setTrustedSourceHint({
                         label: best.arconteSignal?.label || (ptSubtitle > 0 ? 'Ha uma boa chance com legenda PT' : 'O Arconte encontrou uma fonte promissora'),
                         tone: ptSubtitle > 0 ? 'sky' : 'amber',
@@ -452,6 +443,7 @@ export const VideoDetailsPage: React.FC = () => {
                                         <Button
                                             onClick={(event) => {
                                                 event.stopPropagation();
+                                                setStreamDialogManualMode(true);
                                                 setStreamDialog(true);
                                             }}
                                             className="h-11 px-5 rounded-2xl bg-black/60 border border-white/10 text-white hover:bg-black/80 font-black uppercase text-[10px] tracking-[0.2em]"
@@ -577,7 +569,10 @@ export const VideoDetailsPage: React.FC = () => {
                     {/* Interaction Buttons Evolution */}
                     <div className="flex flex-wrap items-center gap-6 p-1 rounded-[2.5rem] bg-white/5 border border-white/10 backdrop-blur-xl">
                         <Button
-                            onClick={() => setStreamDialog(true)}
+                            onClick={() => {
+                                setStreamDialogManualMode(true);
+                                setStreamDialog(true);
+                            }}
                             className="flex-1 md:flex-none h-16 px-6 rounded-[2.2rem] bg-white/5 hover:bg-white/10 text-white font-black uppercase text-[10px] tracking-[0.2em] transition-all duration-500 shadow-glow flex items-center gap-2 border border-white/5 group"
                         >
                             <Database size={16} className="text-cyan-400 group-hover:scale-110 transition-transform" />
@@ -804,10 +799,14 @@ export const VideoDetailsPage: React.FC = () => {
                 <div className="pointer-events-auto">
                     <AddonStreamDialog
                         isOpen={streamDialog}
-                        onClose={() => setStreamDialog(false)}
+                        onClose={() => {
+                            setStreamDialog(false);
+                            setStreamDialogManualMode(false);
+                        }}
                         type={(video?.category === 'series' || video?.tags?.includes('tv')) ? 'series' : 'movie'}
                         id={video?.imdbId || video?.tmdbId || video?.title || ''}
                         title={video?.title || ''}
+                        disableAutoSelect={streamDialogManualMode}
                     />
                 </div>
             </FeatureErrorBoundary>

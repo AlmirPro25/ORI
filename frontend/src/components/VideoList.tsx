@@ -12,10 +12,53 @@ interface VideoSectionProps {
     videos: any[];
     loading?: boolean;
     icon?: React.ReactNode;
+    accentTone?: 'default' | 'portuguese' | 'ready';
 }
 
-const VideoSection = ({ title, videos, loading, icon }: VideoSectionProps) => {
+const getDiscoveryReadiness = (video: any) => {
+    const score = Number(video?.clickReadyScore || 0);
+    const trustBoost = video?.arconteTrustLabel ? 12 : 0;
+    const radarBoost = video?.isCatalogBoosted ? 8 : 0;
+    return score + trustBoost + radarBoost;
+};
+
+const sortByDiscoveryReadiness = (videos: any[]) => {
+    return [...videos].sort((a, b) => {
+        const readinessA = getDiscoveryReadiness(a);
+        const readinessB = getDiscoveryReadiness(b);
+
+        if (Math.abs(readinessA - readinessB) >= 10) return readinessB - readinessA;
+        if (readinessA !== readinessB) return readinessB - readinessA;
+
+        return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+    });
+};
+
+const hasPortugueseValue = (video: any) => {
+    const haystack = `${video?.title || ''} ${video?.tags || ''} ${video?.category || ''}`.toLowerCase();
+    return Boolean(
+        video?.hasDubbed ||
+        video?.hasPortuguese ||
+        video?.hasPortugueseAudio ||
+        video?.hasPortugueseSubs ||
+        video?.isPortuguese ||
+        video?.isDubbed ||
+        /dublado|dual audio|pt-br|portugues|legendado/.test(haystack)
+    );
+};
+
+const VideoSection = ({ title, videos, loading, icon, accentTone = 'default' }: VideoSectionProps) => {
     const scrollRef = React.useRef<HTMLDivElement>(null);
+    const accentClass = accentTone === 'portuguese'
+        ? 'group-hover/section:text-cyan-300'
+        : accentTone === 'ready'
+            ? 'group-hover/section:text-emerald-300'
+            : 'group-hover/section:text-primary';
+    const lineClass = accentTone === 'portuguese'
+        ? 'from-cyan-400/70'
+        : accentTone === 'ready'
+            ? 'from-emerald-400/70'
+            : 'from-primary/60';
 
     const scroll = (direction: 'left' | 'right') => {
         if (scrollRef.current) {
@@ -33,8 +76,8 @@ const VideoSection = ({ title, videos, loading, icon }: VideoSectionProps) => {
             </div>
             <div className="flex items-center gap-8 overflow-hidden">
                 {[1, 2, 3, 4, 5].map(i => (
-                    <div key={i} className="w-64 md:w-80 flex-shrink-0 space-y-4">
-                        <Skeleton className="w-full aspect-video rounded-[2.5rem] bg-white/5" />
+                    <div key={i} className="w-[11rem] sm:w-[12rem] md:w-[13rem] flex-shrink-0 space-y-4">
+                        <Skeleton className="w-full aspect-[2/3] rounded-[2rem] bg-white/5" />
                         <div className="space-y-2 px-2">
                             <Skeleton className="h-5 w-3/4 bg-white/5" />
                             <Skeleton className="h-4 w-1/2 bg-white/5 opacity-50" />
@@ -52,10 +95,10 @@ const VideoSection = ({ title, videos, loading, icon }: VideoSectionProps) => {
             <div className="flex flex-col gap-3 px-6 md:px-16 relative z-10 transition-transform duration-700 group-hover/section:translate-x-2">
                 <div className="flex items-center gap-6">
                     {icon && <div className="p-3.5 bg-white/5 rounded-[1.2rem] border border-white/10 backdrop-blur-3xl shadow-2xl">{icon}</div>}
-                    <h2 className="text-3xl md:text-4xl font-black tracking-[-0.04em] text-white/90 group-hover/section:text-primary transition-all uppercase italic leading-none">
+                    <h2 className={`text-3xl md:text-4xl font-black tracking-[-0.04em] text-white/90 transition-all uppercase italic leading-none ${accentClass}`}>
                         {title}
                     </h2>
-                    <div className="h-0.5 w-32 bg-gradient-to-r from-primary/60 to-transparent rounded-full opacity-0 group-hover/section:opacity-100 transition-opacity duration-700" />
+                    <div className={`h-0.5 w-32 bg-gradient-to-r ${lineClass} to-transparent rounded-full opacity-0 group-hover/section:opacity-100 transition-opacity duration-700`} />
                 </div>
                 <div className="h-px w-full bg-gradient-to-r from-white/10 via-white/5 to-transparent absolute bottom-0 left-0 hidden md:block" />
             </div>
@@ -75,7 +118,15 @@ const VideoSection = ({ title, videos, loading, icon }: VideoSectionProps) => {
                 >
                     {videos.map((video) => (
                         <div key={video.id} className="snap-start">
-                            <VideoCard video={video} />
+                            <VideoCard
+                                video={video}
+                                discoveryMeta={{
+                                    clickReadyScore: video.clickReadyScore,
+                                    arconteTrustLabel: video.arconteTrustLabel,
+                                    isCatalogBoosted: video.isCatalogBoosted,
+                                }}
+                                variant="poster"
+                            />
                         </div>
                     ))}
                 </div>
@@ -107,13 +158,56 @@ export const VideoList: React.FC = () => {
         return feed.rows
             .map((row) => ({
                 title: row.title,
-                videos: row.items
-                    .filter((item) => item.kind === 'video')
-                    .map((item) => byId.get(item.id))
-                    .filter(Boolean) as any[],
+                videos: sortByDiscoveryReadiness(
+                    row.items
+                        .filter((item) => item.kind === 'video')
+                        .map((item) => {
+                            const baseVideo = byId.get(item.id);
+                            if (!baseVideo) return null;
+                            return {
+                                ...baseVideo,
+                                clickReadyScore: item.clickReadyScore,
+                                arconteTrustLabel: item.arconteTrustLabel,
+                                isCatalogBoosted: item.isCatalogBoosted,
+                            };
+                        })
+                        .filter(Boolean) as any[]
+                ),
             }))
             .filter((row) => row.videos.length > 0);
     }, [feed, byId]);
+    const watchNowVideos = React.useMemo(() => {
+        const pool = discoveryRows.flatMap((row) => row.videos);
+        const deduped = new Map<string, any>();
+
+        for (const video of pool) {
+            if (!video?.id) continue;
+            if (!deduped.has(video.id)) {
+                deduped.set(video.id, video);
+            }
+        }
+
+        return sortByDiscoveryReadiness(
+            Array.from(deduped.values()).filter((video) => getDiscoveryReadiness(video) >= 45)
+        ).slice(0, 10);
+    }, [discoveryRows]);
+    const portugueseForYouVideos = React.useMemo(() => {
+        const pool = discoveryRows.flatMap((row) => row.videos);
+        const deduped = new Map<string, any>();
+
+        for (const video of pool) {
+            if (!video?.id) continue;
+            if (!deduped.has(video.id)) {
+                deduped.set(video.id, video);
+            }
+        }
+
+        return sortByDiscoveryReadiness(
+            Array.from(deduped.values()).filter((video) =>
+                hasPortugueseValue(video) && getDiscoveryReadiness(video) >= 35
+            )
+        ).slice(0, 10);
+    }, [discoveryRows]);
     const categories = Array.from(new Set(readyVideos.map(v => v.category || 'Geral')));
 
     if (error) {
@@ -161,6 +255,26 @@ export const VideoList: React.FC = () => {
                     videos={discoveryRows[0]?.videos?.slice(0, 10) || readyVideos.slice(0, 10)}
                     loading={loading}
                     icon={<Sparkles className="text-primary animate-pulse" size={24} />}
+                />
+            )}
+
+            {watchNowVideos.length > 0 && (
+                <VideoSection
+                    title="Assistir Agora"
+                    videos={watchNowVideos}
+                    loading={loading}
+                    icon={<Sparkles className="text-emerald-300 animate-pulse" size={24} />}
+                    accentTone="ready"
+                />
+            )}
+
+            {portugueseForYouVideos.length > 0 && (
+                <VideoSection
+                    title="Em Portugues Para Voce"
+                    videos={portugueseForYouVideos}
+                    loading={loading}
+                    icon={<Sparkles className="text-cyan-300 animate-pulse" size={24} />}
+                    accentTone="portuguese"
                 />
             )}
 

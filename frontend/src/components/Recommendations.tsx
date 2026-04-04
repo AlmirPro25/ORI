@@ -25,11 +25,7 @@ export const Recommendations: React.FC = () => {
     const videos = React.useMemo(() => {
         if (!feed) return [];
         const hour = new Date().getHours();
-        const preferredRowId = hour < 18
-            ? 'light-now'
-            : hour < 23
-                ? 'movie-night'
-                : 'marathon-mode';
+        const preferredRowId = hour < 18 ? 'light-now' : hour < 23 ? 'movie-night' : 'marathon-mode';
 
         return (
             feed.rows.find((row) => row.id === preferredRowId)?.items ||
@@ -63,7 +59,7 @@ export const Recommendations: React.FC = () => {
                 </Link>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-10">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-5">
                 {videos.map((video, idx) => (
                     <motion.div
                         key={`${video.kind}-${video.id}`}
@@ -74,36 +70,36 @@ export const Recommendations: React.FC = () => {
                         className="group relative"
                     >
                         <Link to={video.href}>
-                            <div className="aspect-[16/10] rounded-[2.8rem] overflow-hidden border border-white/5 bg-white/5 relative mb-6 shadow-2xl transition-all duration-700 group-hover:border-primary/50 group-hover:-translate-y-2">
+                            <div className="aspect-[2/3] rounded-[2rem] overflow-hidden border border-white/5 bg-white/[0.03] relative shadow-2xl transition-all duration-700 group-hover:border-primary/50 group-hover:-translate-y-2">
                                 <img
                                     src={resolveImage(video)}
                                     alt={video.title}
-                                    className="w-full h-full object-cover opacity-60 group-hover:opacity-100 group-hover:scale-110 transition-all duration-1000 grayscale-[0.3] group-hover:grayscale-0"
+                                    className="w-full h-full object-cover opacity-80 group-hover:opacity-100 group-hover:scale-110 transition-all duration-1000 grayscale-[0.15] group-hover:grayscale-0"
                                 />
 
-                                <div className="absolute inset-0 bg-gradient-to-t from-black via-black/20 to-transparent opacity-80 group-hover:opacity-100 transition-opacity" />
+                                <div className="absolute inset-0 bg-gradient-to-t from-black via-black/25 to-transparent opacity-90 group-hover:opacity-100 transition-opacity" />
 
                                 <div className="absolute inset-0 flex items-center justify-center translate-y-8 group-hover:translate-y-0 opacity-0 group-hover:opacity-100 transition-all duration-500">
-                                    <div className="bg-primary text-black p-5 rounded-full shadow-[0_0_40px_rgba(var(--primary)/0.5)] scale-90 group-hover:scale-100 transition-transform">
-                                        <Play size={28} fill="currentColor" />
+                                    <div className="bg-primary text-black p-4 rounded-full shadow-[0_0_40px_rgba(var(--primary)/0.5)] scale-90 group-hover:scale-100 transition-transform">
+                                        <Play size={22} fill="currentColor" />
                                     </div>
                                 </div>
 
-                                <div className="absolute top-6 right-6 translate-x-6 opacity-0 group-hover:translate-x-0 group-hover:opacity-100 transition-all duration-500">
-                                    <span className="px-4 py-1.5 bg-black/60 backdrop-blur-2xl rounded-xl text-[9px] font-black uppercase tracking-widest text-primary border border-primary/20">
-                                        {video.badge} • {getSafetyLabel(video)}
+                                <div className="absolute top-3 left-3 right-3 flex items-start justify-between">
+                                    <span className="px-2.5 py-1 bg-black/60 backdrop-blur-2xl rounded-lg text-[7px] font-black uppercase tracking-[0.16em] text-white/85 border border-white/10">
+                                        {video.badge}
+                                    </span>
+                                    <span className="px-2 py-1 bg-primary/15 backdrop-blur-2xl rounded-lg text-[7px] font-black uppercase tracking-[0.16em] text-primary border border-primary/20">
+                                        {getSafetyLabel(video)}
                                     </span>
                                 </div>
-                            </div>
 
-                            <div className="px-3 space-y-2">
-                                <h3 className="text-lg font-black text-white/70 truncate group-hover:text-primary transition-colors uppercase italic tracking-tight">
-                                    {video.title}
-                                </h3>
-                                <div className="flex items-center gap-3">
-                                    <div className="w-1.5 h-1.5 rounded-full bg-primary/20 group-hover:bg-primary transition-colors animate-pulse" />
-                                    <p className="text-[9px] text-white/20 font-black uppercase tracking-[0.2em] group-hover:text-white/40 transition-colors">
-                                        {video.isPortuguese ? 'Prioridade PT-BR' : video.category} • {Math.round(video.score)} pts
+                                <div className="absolute inset-x-0 bottom-0 p-4">
+                                    <h3 className="text-base font-black text-white line-clamp-2 group-hover:text-primary transition-colors uppercase italic tracking-tight">
+                                        {video.title}
+                                    </h3>
+                                    <p className="text-[9px] text-white/55 font-black uppercase tracking-[0.18em] mt-2">
+                                        {video.isPortuguese ? 'Prioridade PT-BR' : video.category}
                                     </p>
                                 </div>
                             </div>

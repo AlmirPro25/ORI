@@ -13,19 +13,32 @@ import { MediaBadges } from './MediaBadges';
 
 interface VideoCardProps {
     video: Video;
+    discoveryMeta?: {
+        clickReadyScore?: number;
+        arconteTrustLabel?: string;
+        isCatalogBoosted?: boolean;
+    };
+    variant?: 'landscape' | 'poster';
 }
 
-export const VideoCard: React.FC<VideoCardProps> = ({ video }) => {
+export const VideoCard: React.FC<VideoCardProps> = ({ video, discoveryMeta, variant = 'landscape' }) => {
     const { user } = useAuthStore();
     const { refresh } = useVideoFeed();
     const [isDeleting, setIsDeleting] = React.useState(false);
     const [isFavorited, setIsFavorited] = React.useState(false);
     const isAdmin = user?.role === 'ADMIN';
+    const isPosterVariant = variant === 'poster';
+    const isPlayableEntry = ['READY', 'NEXUS', 'CATALOG', 'REMOTE'].includes(String(video.status || ''));
+    const readinessTone = React.useMemo(() => {
+        const score = Number(discoveryMeta?.clickReadyScore || 0);
+        if (score >= 80) return { label: 'Pronto para clicar', className: 'bg-emerald-500/15 text-emerald-300 border-emerald-400/30' };
+        if (score >= 45) return { label: 'Boa chance de play', className: 'bg-sky-500/15 text-sky-300 border-sky-400/30' };
+        if (score > 0) return { label: 'Catalogo promissor', className: 'bg-amber-500/15 text-amber-200 border-amber-400/30' };
+        return null;
+    }, [discoveryMeta?.clickReadyScore]);
 
     React.useEffect(() => {
-        if (user && video.id) {
-            checkStatus();
-        }
+        if (user && video.id) checkStatus();
     }, [user, video.id]);
 
     const checkStatus = async () => {
@@ -35,20 +48,19 @@ export const VideoCard: React.FC<VideoCardProps> = ({ video }) => {
         } catch (e) { }
     };
 
-    // Placeholder para thumbnail caso não exista
     const thumbnail = video.thumbnailPath
         ? video.thumbnailPath.startsWith('http')
-            ? video.thumbnailPath // É uma URL externa (Nexus/AI)
-            : `${STORAGE_BASE_URL}/${video.thumbnailPath}` // É arquivo local
+            ? video.thumbnailPath
+            : `${STORAGE_BASE_URL}/${video.thumbnailPath}`
         : video.status === 'NEXUS'
-            ? `https://images.unsplash.com/photo-1550751827-4bd374c3f58b?q=80&w=400&auto=format&fit=crop` // Visual Cyber
+            ? `https://images.unsplash.com/photo-1550751827-4bd374c3f58b?q=80&w=400&auto=format&fit=crop`
             : `https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2564&auto=format&fit=crop`;
 
     const handleDelete = async (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
 
-        if (!window.confirm(`Deseja realmente excluir o vídeo "${video.title}"?`)) return;
+        if (!window.confirm(`Deseja realmente excluir o vÃ­deo "${video.title}"?`)) return;
 
         setIsDeleting(true);
         try {
@@ -56,7 +68,7 @@ export const VideoCard: React.FC<VideoCardProps> = ({ video }) => {
             refresh();
         } catch (err) {
             console.error('Failed to delete video:', err);
-            alert('Falha ao excluir vídeo.');
+            alert('Falha ao excluir vÃ­deo.');
         } finally {
             setIsDeleting(false);
         }
@@ -68,103 +80,169 @@ export const VideoCard: React.FC<VideoCardProps> = ({ video }) => {
             whileInView={{ opacity: 1, scale: 1 }}
             viewport={{ once: true }}
             whileHover={{ scale: 1.05, y: -10 }}
-            transition={{ type: "spring", stiffness: 400, damping: 25 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 25 }}
             className={cn(
-                "group relative flex-shrink-0 w-64 md:w-80 aspect-video rounded-[2.5rem] overflow-hidden cursor-pointer shadow-2xl transition-all duration-700 border",
-                video.status === 'NEXUS' ? 'border-primary/40 shadow-primary/10' : 'border-white/5',
-                "bg-black/40 backdrop-blur-3xl"
+                'group relative flex-shrink-0 overflow-hidden cursor-pointer shadow-2xl transition-all duration-700 border bg-black/40 backdrop-blur-3xl',
+                isPosterVariant ? 'w-[11rem] sm:w-[12rem] md:w-[13rem] aspect-[2/3] rounded-[2rem]' : 'w-64 md:w-80 aspect-video rounded-[2.5rem]',
+                video.status === 'NEXUS' ? 'border-primary/40 shadow-primary/10' : 'border-white/5'
             )}
         >
             <img
                 src={thumbnail}
                 alt={video.title}
-                className="w-full h-full object-cover transition-all duration-1000 group-hover:scale-110 opacity-60 group-hover:opacity-100 grayscale-[0.2] group-hover:grayscale-0"
+                className={cn(
+                    'w-full h-full object-cover transition-all duration-1000 group-hover:scale-110 group-hover:opacity-100 group-hover:grayscale-0',
+                    isPosterVariant ? 'opacity-85 grayscale-0' : 'opacity-60 grayscale-[0.2]'
+                )}
             />
 
-            {/* Status Tags */}
-            <div className="absolute inset-x-0 top-0 p-6 flex justify-between items-start z-20">
-                {video.category && (
-                    <span className="bg-black/60 backdrop-blur-2xl text-primary text-[8px] font-black px-4 py-1.5 rounded-xl border border-primary/20 uppercase tracking-[0.2em] shadow-glow-sm">
-                        {video.category}
-                    </span>
-                )}
-                {video.status === 'NEXUS' && (
-                    <div className="flex items-center gap-2 bg-primary text-black text-[8px] font-black px-4 py-1.5 rounded-xl shadow-glow">
-                        <Sparkles size={12} fill="black" />
-                        <span className="uppercase tracking-widest italic">NEXUS LINK</span>
-                    </div>
-                )}
+            <div className={cn('absolute inset-x-0 top-0 flex justify-between items-start z-20', isPosterVariant ? 'p-3' : 'p-6')}>
+                <div className={cn('flex flex-wrap items-start gap-2', isPosterVariant ? 'max-w-[62%]' : 'max-w-[70%]')}>
+                    {video.category && (
+                        <span className={cn(
+                            'bg-black/60 backdrop-blur-2xl text-primary font-black border border-primary/20 uppercase shadow-glow-sm',
+                            isPosterVariant ? 'text-[7px] px-2.5 py-1 rounded-lg tracking-[0.16em]' : 'text-[8px] px-4 py-1.5 rounded-xl tracking-[0.2em]'
+                        )}>
+                            {video.category}
+                        </span>
+                    )}
+                    {!isPosterVariant && readinessTone && (
+                        <span className={cn('font-black border uppercase text-[8px] px-4 py-1.5 rounded-xl tracking-[0.18em]', readinessTone.className)}>
+                            {readinessTone.label}
+                        </span>
+                    )}
+                    {!isPosterVariant && discoveryMeta?.isCatalogBoosted && (
+                        <span className="bg-fuchsia-500/15 text-fuchsia-200 font-black border border-fuchsia-400/20 uppercase text-[8px] px-4 py-1.5 rounded-xl tracking-[0.18em]">
+                            Radar do Arconte
+                        </span>
+                    )}
+                </div>
+
+                <div className="flex flex-col items-end gap-2">
+                    {video.status === 'NEXUS' && (
+                        <div className={cn(
+                            'flex items-center gap-2 bg-primary text-black font-black shadow-glow',
+                            isPosterVariant ? 'text-[7px] px-2.5 py-1 rounded-lg' : 'text-[8px] px-4 py-1.5 rounded-xl'
+                        )}>
+                            <Sparkles size={12} fill="black" />
+                            <span className="uppercase tracking-widest italic">NEXUS LINK</span>
+                        </div>
+                    )}
+                    {discoveryMeta?.clickReadyScore ? (
+                        <span className={cn(
+                            'bg-black/60 backdrop-blur-2xl text-white/70 font-black border border-white/10 uppercase',
+                            isPosterVariant ? 'text-[7px] px-2 py-1 rounded-lg tracking-[0.16em]' : 'text-[8px] px-3 py-1 rounded-xl tracking-[0.18em]'
+                        )}>
+                            {Math.round(discoveryMeta.clickReadyScore)} pts
+                        </span>
+                    ) : null}
+                </div>
             </div>
 
-            {/* Bottom Info Overlay */}
-            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/90 to-transparent p-6 pt-16 translate-y-4 group-hover:translate-y-0 transition-transform duration-700">
-                <h3 className="text-white font-black text-lg mb-2 truncate tracking-tight group-hover:text-primary transition-colors uppercase italic leading-none">{video.title}</h3>
+            <div className={cn(
+                'absolute inset-x-0 bottom-0 bg-gradient-to-t from-black via-black/90 to-transparent transition-transform duration-700',
+                isPosterVariant ? 'p-4 pt-20' : 'p-6 pt-16 translate-y-4 group-hover:translate-y-0'
+            )}>
+                <h3 className={cn(
+                    'text-white font-black tracking-tight group-hover:text-primary transition-colors uppercase italic leading-none',
+                    isPosterVariant ? 'text-base mb-2 line-clamp-2' : 'text-lg mb-2 truncate'
+                )}>
+                    {video.title}
+                </h3>
 
-                {/* Media Badges */}
-                <MediaBadges
-                    audioTracks={(video as any).audioTracks}
-                    subtitleTracks={(video as any).subtitleTracks}
-                    hasPortuguese={(video as any).hasPortuguese}
-                    hasDubbed={(video as any).hasDubbed}
-                />
+                {!isPosterVariant && discoveryMeta?.arconteTrustLabel && (
+                    <div className="mb-3">
+                        <span className="inline-flex items-center gap-2 bg-white/5 border border-white/10 font-black uppercase text-white/75 text-[9px] tracking-[0.18em] px-3 py-1.5 rounded-xl">
+                            <Sparkles size={10} className="text-primary" />
+                            {discoveryMeta.arconteTrustLabel}
+                        </span>
+                    </div>
+                )}
 
-                <div className="flex items-center gap-3 opacity-0 group-hover:opacity-100 transition-all duration-500 scale-95 group-hover:scale-100 mt-4">
-                    {video.status === 'READY' || video.status === 'NEXUS' ? (
+                {!isPosterVariant ? (
+                    <MediaBadges
+                        audioTracks={(video as any).audioTracks}
+                        subtitleTracks={(video as any).subtitleTracks}
+                        hasPortuguese={(video as any).hasPortuguese}
+                        hasDubbed={(video as any).hasDubbed}
+                    />
+                ) : (
+                    <p className="text-[9px] text-white/55 uppercase tracking-[0.18em] mb-1">
+                        {video.status === 'CATALOG' ? 'Catalogado para abrir' : 'Pronto para assistir'}
+                    </p>
+                )}
+
+                <div className={cn(
+                    'flex items-center gap-3 transition-all duration-500 scale-95 group-hover:scale-100',
+                    isPosterVariant ? 'opacity-100 mt-3' : 'opacity-0 group-hover:opacity-100 mt-4'
+                )}>
+                    {isPlayableEntry ? (
                         <Link to={`/videos/${video.id}`} className="flex-1">
-                            <button className="w-full bg-white text-black h-12 rounded-[1.2rem] flex items-center justify-center gap-3 hover:bg-primary hover:shadow-glow-sm transition-all transform active:scale-95 group/btn">
+                            <button className={cn(
+                                'w-full bg-white text-black flex items-center justify-center gap-3 hover:bg-primary hover:shadow-glow-sm transition-all transform active:scale-95 group/btn',
+                                isPosterVariant ? 'h-11 rounded-[1rem]' : 'h-12 rounded-[1.2rem]'
+                            )}>
                                 <Play size={16} fill="black" className="group-hover/btn:scale-125 transition-transform" />
-                                <span className="text-[10px] font-black uppercase tracking-[0.2em]">Transmitir</span>
+                                <span className="text-[10px] font-black uppercase tracking-[0.2em]">
+                                    {video.status === 'CATALOG' ? 'Abrir' : 'Transmitir'}
+                                </span>
                             </button>
                         </Link>
                     ) : (
-                        <div className="flex-1 bg-white/5 backdrop-blur-2xl text-primary h-12 rounded-[1.2rem] text-[10px] font-black uppercase text-center border border-primary/20 flex items-center justify-center gap-3">
+                        <div className={cn(
+                            'flex-1 bg-white/5 backdrop-blur-2xl text-primary text-[10px] font-black uppercase text-center border border-primary/20 flex items-center justify-center gap-3',
+                            isPosterVariant ? 'h-11 rounded-[1rem]' : 'h-12 rounded-[1.2rem]'
+                        )}>
                             {video.status === 'FAILED' ? <AlertTriangle size={14} className="text-red-500" /> : <Loader2 size={14} className="animate-spin" />}
                             <span className="tracking-widest italic">{video.status}</span>
                         </div>
                     )}
 
-                    <button
-                        onClick={async (e) => {
-                            e.preventDefault();
-                            if (!user) return alert('Faça login para salvar!');
-                            try {
-                                const res = await apiClient.post(`/users/${user.id}/favorites/${video.id}`);
-                                setIsFavorited(res.data.favorited);
-                            } catch (e) {
-                                console.error('Failed to toggle favorite');
-                            }
-                        }}
-                        className={cn(
-                            "h-12 w-12 rounded-[1.2rem] transition-all border flex items-center justify-center",
-                            isFavorited
-                                ? "bg-primary/20 border-primary text-primary shadow-glow-sm"
-                                : "bg-white/5 border-white/10 text-white/40 hover:text-white hover:bg-white/10"
-                        )}
-                    >
-                        {isFavorited ? <Bookmark size={20} fill="currentColor" /> : <Plus size={20} />}
-                    </button>
+                    {!isPosterVariant && (
+                        <button
+                            onClick={async (e) => {
+                                e.preventDefault();
+                                if (!user) return alert('FaÃ§a login para salvar!');
+                                try {
+                                    const res = await apiClient.post(`/users/${user.id}/favorites/${video.id}`);
+                                    setIsFavorited(res.data.favorited);
+                                } catch (e) {
+                                    console.error('Failed to toggle favorite');
+                                }
+                            }}
+                            className={cn(
+                                'transition-all border flex items-center justify-center h-12 w-12 rounded-[1.2rem]',
+                                isFavorited ? 'bg-primary/20 border-primary text-primary shadow-glow-sm' : 'bg-white/5 border-white/10 text-white/40 hover:text-white hover:bg-white/10'
+                            )}
+                        >
+                            {isFavorited ? <Bookmark size={20} fill="currentColor" /> : <Plus size={20} />}
+                        </button>
+                    )}
 
-                    {isAdmin && (
+                    {isAdmin && !isPosterVariant && (
                         <button
                             onClick={handleDelete}
                             disabled={isDeleting}
-                            className="h-12 w-12 bg-red-500/10 hover:bg-red-500 text-white rounded-[1.2rem] transition-all border border-red-500/20 flex items-center justify-center"
+                            className="bg-red-500/10 hover:bg-red-500 text-white transition-all border border-red-500/20 flex items-center justify-center h-12 w-12 rounded-[1.2rem]"
                         >
                             {isDeleting ? <Loader2 size={18} className="animate-spin" /> : <Trash2 size={18} />}
                         </button>
                     )}
                 </div>
 
-                <div className="mt-5 flex items-center justify-between text-[8px] font-black uppercase tracking-[0.3em] text-white/30">
-                    <span className="flex items-center gap-2">
-                        <div className="w-1.5 h-1.5 rounded-full bg-primary/40 group-hover:bg-primary animate-pulse" />
-                        {video.status === 'NEXUS' ? 'Neural Link Online' : 'Broadcasting Layer 1'}
-                    </span>
-                    <span className="bg-white/5 px-3 py-1 rounded-lg border border-white/5 group-hover:text-white/60 transition-colors">v1.2.4</span>
-                </div>
+                {!isPosterVariant && (
+                    <div className="flex items-center justify-between font-black uppercase text-white/30 mt-5 text-[8px] tracking-[0.3em]">
+                        <span className="flex items-center gap-2">
+                            <div className="w-1.5 h-1.5 rounded-full bg-primary/40 group-hover:bg-primary animate-pulse" />
+                            {video.status === 'NEXUS' ? 'Neural Link Online' : 'Broadcast Layer 1'}
+                        </span>
+                        <span className="bg-white/5 border border-white/5 group-hover:text-white/60 transition-colors px-3 py-1 rounded-lg">
+                            v1.2.4
+                        </span>
+                    </div>
+                )}
             </div>
 
-            {/* Interactive Glow on Hover */}
             <div className="absolute inset-0 bg-primary/10 opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none blur-3xl rounded-full" />
         </motion.div>
     );

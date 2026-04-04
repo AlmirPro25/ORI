@@ -66,7 +66,8 @@ export const HeroSection = () => {
                 feed.featured.category || 'Catalogo',
                 feed.featured.quality || (feed.featured.kind === 'series' ? 'Serie' : '1080p'),
                 feed.featured.isPortuguese ? 'PT-BR' : feed.featured.status,
-            ].filter(Boolean),
+                feed.featured.arconteTrustLabel || null,
+            ].filter((item): item is string => Boolean(item)),
             rating: Math.min(9.9, 7.4 + scoreBoost).toFixed(1),
         };
     }, [feed]);

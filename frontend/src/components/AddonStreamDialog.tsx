@@ -34,6 +34,7 @@ interface AddonStreamDialogProps {
     id: string;
     title: string;
     onMaterializeStream?: (stream: Stream) => Promise<void>;
+    disableAutoSelect?: boolean;
 }
 
 export const AddonStreamDialog: React.FC<AddonStreamDialogProps> = ({
@@ -43,6 +44,7 @@ export const AddonStreamDialog: React.FC<AddonStreamDialogProps> = ({
     id,
     title,
     onMaterializeStream,
+    disableAutoSelect = false,
 }) => {
     const [loading, setLoading] = useState(false);
     const [streams, setStreams] = useState<Stream[]>([]);
@@ -409,6 +411,7 @@ export const AddonStreamDialog: React.FC<AddonStreamDialogProps> = ({
     }, [filteredStreams]);
 
     const shouldAutoSelectBest = useMemo(() => {
+        if (disableAutoSelect) return false;
         const best = filteredStreams[0];
         if (!best || activeStream || loading || !!error) return false;
         if (selectedAddon !== 'all' || streamQuery.trim().length > 0) return false;
@@ -430,7 +433,7 @@ export const AddonStreamDialog: React.FC<AddonStreamDialogProps> = ({
             (trustLevel === 'high' && (strength === 'Forte' || hasPortugueseValue)) ||
             (confidenceTone === 'emerald' && hasPortugueseValue)
         );
-    }, [filteredStreams, activeStream, loading, error, selectedAddon, streamQuery]);
+    }, [disableAutoSelect, filteredStreams, activeStream, loading, error, selectedAddon, streamQuery]);
 
     const confidenceHint = useMemo(() => {
         const best = filteredStreams[0];

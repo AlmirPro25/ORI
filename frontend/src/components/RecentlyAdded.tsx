@@ -26,7 +26,7 @@ export const RecentlyAdded: React.FC = () => {
             <rect width="800" height="450" fill="#0a1019"/>
             <circle cx="620" cy="120" r="90" fill="#22d3ee" fill-opacity="0.12"/>
             <text x="60" y="220" fill="#f8fafc" font-size="48" font-family="Arial" font-weight="700">ARCONTE</text>
-            <text x="60" y="280" fill="#67e8f9" font-size="24" font-family="Arial">conteúdo real em sincronização</text>
+            <text x="60" y="280" fill="#67e8f9" font-size="24" font-family="Arial">conteÃºdo real em sincronizaÃ§Ã£o</text>
         </svg>
     `)}`;
 
@@ -57,7 +57,7 @@ export const RecentlyAdded: React.FC = () => {
                 </div>
             </div>
 
-            <div className="flex gap-8 overflow-x-auto pb-12 no-scrollbar snap-x snap-mandatory">
+            <div className="flex gap-5 overflow-x-auto pb-12 no-scrollbar snap-x snap-mandatory">
                 {videos.map((video, idx) => (
                     <motion.div
                         key={`${video.kind}-${video.id}`}
@@ -65,29 +65,33 @@ export const RecentlyAdded: React.FC = () => {
                         whileInView={{ opacity: 1, scale: 1, x: 0 }}
                         viewport={{ once: true }}
                         transition={{ delay: idx * 0.1, duration: 0.8, ease: 'easeOut' }}
-                        className="flex-shrink-0 w-80 snap-start group"
+                        className="flex-shrink-0 w-[11rem] sm:w-[12rem] md:w-[13rem] snap-start group"
                     >
                         <Link to={video.href}>
-                            <div className="relative aspect-video rounded-[2.5rem] overflow-hidden border border-white/5 transition-all duration-700 group-hover:border-primary/40 shadow-2xl group-hover:shadow-primary/10">
+                            <div className="relative aspect-[2/3] rounded-[2rem] overflow-hidden border border-white/5 bg-white/[0.02] transition-all duration-700 group-hover:border-primary/40 shadow-2xl group-hover:shadow-primary/10">
                                 <img
                                     src={resolveImage(video)}
                                     alt={video.title}
                                     onError={(e) => {
                                         (e.target as HTMLImageElement).src = fallbackImage;
                                     }}
-                                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-1000 opacity-60 group-hover:opacity-100 grayscale-[0.5] group-hover:grayscale-0"
+                                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-1000 opacity-80 group-hover:opacity-100 grayscale-[0.15] group-hover:grayscale-0"
                                 />
 
-                                <div className="absolute inset-0 bg-gradient-to-t from-black via-black/20 to-transparent flex flex-col justify-end p-8">
-                                    <div className="flex items-center gap-2 mb-3 translate-y-4 group-hover:translate-y-0 opacity-0 group-hover:opacity-100 transition-all duration-500">
-                                        <div className="p-1 px-2 bg-primary/20 backdrop-blur-md rounded-lg border border-primary/20">
-                                            <span className="text-[8px] font-black uppercase text-primary tracking-[0.2em]">{video.badge} • {getSafetyLabel(video)}</span>
-                                        </div>
-                                    </div>
-                                    <h3 className="text-xl font-black text-white/80 truncate group-hover:text-white transition-colors tracking-tight uppercase italic leading-none">
+                                <div className="absolute top-3 left-3 right-3 flex items-start justify-between">
+                                    <span className="px-2.5 py-1 bg-black/60 backdrop-blur-md rounded-lg border border-white/10 text-[7px] font-black uppercase tracking-[0.16em] text-white/80">
+                                        {video.badge}
+                                    </span>
+                                    <span className="px-2 py-1 bg-primary/15 backdrop-blur-md rounded-lg border border-primary/20 text-[7px] font-black uppercase tracking-[0.16em] text-primary">
+                                        {getSafetyLabel(video)}
+                                    </span>
+                                </div>
+
+                                <div className="absolute inset-0 bg-gradient-to-t from-black via-black/35 to-transparent flex flex-col justify-end p-4">
+                                    <h3 className="text-base font-black text-white leading-tight line-clamp-2 group-hover:text-primary transition-colors uppercase italic">
                                         {video.title}
                                     </h3>
-                                    <p className="text-[10px] uppercase tracking-[0.2em] text-white/35 mt-2">
+                                    <p className="text-[9px] uppercase tracking-[0.18em] text-white/55 mt-2">
                                         {video.isPortuguese ? 'PT-BR em foco' : video.category}
                                     </p>
                                 </div>

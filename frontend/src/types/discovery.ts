@@ -17,6 +17,10 @@ export interface DiscoveryItem {
     isKidsSafe?: boolean;
     isFamilySafe?: boolean;
     isAdult?: boolean;
+    isCatalogBoosted?: boolean;
+    clickReadyScore?: number;
+    arconteTrust?: 'high' | 'medium' | 'low';
+    arconteTrustLabel?: string;
     safetyLabel?: 'kids-safe' | 'family-safe' | 'adult' | 'general';
     tags?: string[];
     createdAt: string;

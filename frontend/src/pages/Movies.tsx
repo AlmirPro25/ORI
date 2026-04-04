@@ -9,23 +9,9 @@ import { useDiscoveryFeed } from '@/hooks/useDiscovery';
 const CATALOG_STATUSES = new Set(['READY', 'REMOTE', 'CATALOG', 'NEXUS']);
 
 const MOVIE_TERMS = [
-    'filme',
-    'filmes',
-    'movie',
-    'movies',
-    'acao',
-    'ação',
-    'drama',
-    'comedia',
-    'comédia',
-    'documentario',
-    'documentário',
-    'animacao',
-    'animação',
-    'terror',
-    'sci-fi',
-    'ficcao cientifica',
-    'ficção científica'
+    'filme', 'filmes', 'movie', 'movies', 'acao', 'aÃ§Ã£o', 'drama',
+    'comedia', 'comÃ©dia', 'documentario', 'documentÃ¡rio', 'animacao',
+    'animaÃ§Ã£o', 'terror', 'sci-fi', 'ficcao cientifica', 'ficÃ§Ã£o cientÃ­fica'
 ];
 
 function isMovieLike(video: Video) {
@@ -33,10 +19,7 @@ function isMovieLike(video: Video) {
     const title = (video.title || '').toLowerCase();
     const tags = (video.tags || '').toLowerCase();
 
-    if (category === 'series' || tags.includes('series')) {
-        return false;
-    }
-
+    if (category === 'series' || tags.includes('series')) return false;
     return MOVIE_TERMS.some(term => category.includes(term) || title.includes(term) || tags.includes(term));
 }
 
@@ -51,25 +34,44 @@ function hasPortuguesePriority(video: Video) {
     );
 }
 
+function getDiscoveryReadiness(meta?: {
+    clickReadyScore?: number;
+    arconteTrustLabel?: string;
+    isCatalogBoosted?: boolean;
+}) {
+    const score = Number(meta?.clickReadyScore || 0);
+    return score + (meta?.arconteTrustLabel ? 12 : 0) + (meta?.isCatalogBoosted ? 8 : 0);
+}
+
 export const MoviesPage: React.FC = () => {
     const { videos, loading } = useVideoFeed();
     const { feed, loading: discoveryLoading } = useDiscoveryFeed();
+    const discoveryMetaById = useMemo(() => {
+        return new Map(
+            (feed?.movies || [])
+                .filter((item) => item.kind === 'video')
+                .map((item) => [
+                    item.id,
+                    {
+                        clickReadyScore: item.clickReadyScore,
+                        arconteTrustLabel: item.arconteTrustLabel,
+                        isCatalogBoosted: item.isCatalogBoosted,
+                    },
+                ])
+        );
+    }, [feed]);
 
     const movies = useMemo(() => {
         const videosById = new Map(videos.map((video) => [video.id, video]));
         const discoveryMovieIds = new Set(
-            (feed?.movies || [])
-                .filter((item) => item.kind === 'video')
-                .map((item) => item.id)
+            (feed?.movies || []).filter((item) => item.kind === 'video').map((item) => item.id)
         );
         const baseMovies = videos.filter(video =>
             CATALOG_STATUSES.has(video.status) &&
             (isMovieLike(video) || discoveryMovieIds.has(video.id))
         );
         const discoveryOrder = new Map(
-            (feed?.movies || [])
-                .filter((item) => item.kind === 'video')
-                .map((item, index) => [item.id, index])
+            (feed?.movies || []).filter((item) => item.kind === 'video').map((item, index) => [item.id, index])
         );
         const discoveryPortuguese = new Set(
             (feed?.movies || [])
@@ -108,9 +110,7 @@ export const MoviesPage: React.FC = () => {
 
         const mergedMovies = [...baseMovies];
         for (const candidate of synthesizedDiscoveryMovies) {
-            if (!mergedMovies.some((video) => video.id === candidate.id)) {
-                mergedMovies.push(candidate);
-            }
+            if (!mergedMovies.some((video) => video.id === candidate.id)) mergedMovies.push(candidate);
         }
 
         return [...mergedMovies].sort((a, b) => {
@@ -118,16 +118,18 @@ export const MoviesPage: React.FC = () => {
             const indexB = discoveryOrder.get(b.id);
             const ptbrA = discoveryPortuguese.has(a.id) || hasPortuguesePriority(a);
             const ptbrB = discoveryPortuguese.has(b.id) || hasPortuguesePriority(b);
+            const readinessA = getDiscoveryReadiness(discoveryMetaById.get(a.id));
+            const readinessB = getDiscoveryReadiness(discoveryMetaById.get(b.id));
 
             if (ptbrA !== ptbrB) return ptbrA ? -1 : 1;
-
+            if (Math.abs(readinessA - readinessB) >= 10) return readinessB - readinessA;
             if (indexA !== undefined && indexB !== undefined) return indexA - indexB;
             if (indexA !== undefined) return -1;
             if (indexB !== undefined) return 1;
-
+            if (readinessA !== readinessB) return readinessB - readinessA;
             return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
         });
-    }, [videos, feed]);
+    }, [videos, feed, discoveryMetaById]);
 
     if (loading || discoveryLoading) {
         return (
@@ -143,34 +145,38 @@ export const MoviesPage: React.FC = () => {
                 <motion.div
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="flex items-center gap-4 border-b border-white/10 pb-8"
+                    className="flex flex-col md:flex-row md:items-center md:justify-between gap-6"
                 >
-                    <div className="p-4 bg-primary/10 rounded-2xl border border-primary/20">
-                        <Film className="w-8 h-8 text-primary" />
+                    <div className="flex items-center gap-4">
+                        <div className="p-4 bg-gradient-to-br from-primary/10 to-purple-500/10 rounded-2xl border border-primary/20">
+                            <Film className="w-8 h-8 text-primary" />
+                        </div>
+                        <div>
+                            <h1 className="text-4xl md:text-5xl font-black text-white tracking-tight">
+                                Filmes <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary to-purple-400">Nexus</span>
+                            </h1>
+                            <p className="text-white/30 text-sm font-medium mt-1">
+                                {movies.length} filme{movies.length !== 1 ? 's' : ''} no catalogo
+                            </p>
+                        </div>
                     </div>
-                    <div>
-                        <h1 className="text-4xl md:text-5xl font-black uppercase italic tracking-tighter text-white">
-                            Cine <span className="text-transparent bg-clip-text bg-gradient-to-r from-primary to-purple-500">Nexus</span>
-                        </h1>
-                        <p className="text-white/40 text-lg font-medium mt-2">
-                            Longas-metragens organizados pelo feed editorial do Arconte.
-                        </p>
-                        <p className="text-white/20 text-sm font-medium mt-1">
-                            {movies.length} filme{movies.length !== 1 ? 's' : ''} visive{movies.length !== 1 ? 'is' : 'l'} no catalogo
-                        </p>
-                    </div>
+
+                    <p className="max-w-xl text-white/35 text-sm md:text-right">
+                        Longas-metragens organizados pelo feed editorial do Arconte.
+                    </p>
                 </motion.div>
 
                 {movies.length > 0 ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-5">
                         {movies.map((video, idx) => (
                             <motion.div
                                 key={video.id}
                                 initial={{ opacity: 0, scale: 0.9 }}
                                 animate={{ opacity: 1, scale: 1 }}
                                 transition={{ delay: idx * 0.05 }}
+                                className="flex justify-center"
                             >
-                                <VideoCard video={video} />
+                                <VideoCard video={video} discoveryMeta={discoveryMetaById.get(video.id)} variant="poster" />
                             </motion.div>
                         ))}
                     </div>

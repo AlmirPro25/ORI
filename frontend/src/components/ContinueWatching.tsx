@@ -30,7 +30,7 @@ export const ContinueWatching: React.FC = () => {
                 const res = await apiClient.get(`/users/${user.id}/history`);
                 setHistory(Array.isArray(res.data) ? res.data : []);
             } catch (e) {
-                console.error('Falha ao buscar histórico');
+                console.error('Falha ao buscar histÃ³rico');
             } finally {
                 setLoading(false);
             }
@@ -67,7 +67,7 @@ export const ContinueWatching: React.FC = () => {
                 </div>
             </div>
 
-            <div className="flex gap-8 overflow-x-auto pb-8 no-scrollbar snap-x snap-mandatory">
+            <div className="flex gap-5 overflow-x-auto pb-8 no-scrollbar snap-x snap-mandatory">
                 {resumableHistory.map((item, idx) => (
                     <motion.div
                         key={item.id}
@@ -75,10 +75,10 @@ export const ContinueWatching: React.FC = () => {
                         whileInView={{ opacity: 1, scale: 1, x: 0 }}
                         viewport={{ once: true }}
                         transition={{ delay: idx * 0.1, duration: 0.8 }}
-                        className="flex-shrink-0 w-80 snap-start group"
+                        className="flex-shrink-0 w-[11rem] sm:w-[12rem] md:w-[13rem] snap-start group"
                     >
                         <Link to={`/videos/${item.video.id}`}>
-                            <div className="relative aspect-video rounded-[2.2rem] overflow-hidden border border-white/5 transition-all duration-700 group-hover:border-primary/40 shadow-2xl">
+                            <div className="relative aspect-[2/3] rounded-[2rem] overflow-hidden border border-white/5 bg-white/[0.02] transition-all duration-700 group-hover:border-primary/40 shadow-2xl">
                                 <img
                                     src={item.video.thumbnailPath?.startsWith('http')
                                         ? item.video.thumbnailPath
@@ -87,10 +87,9 @@ export const ContinueWatching: React.FC = () => {
                                     onError={(e) => {
                                         (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1594909122845-11baa439b7bf?q=80&w=500';
                                     }}
-                                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-1000 opacity-60 group-hover:opacity-100"
+                                    className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-1000 opacity-80 group-hover:opacity-100"
                                 />
 
-                                {/* Progress Bar */}
                                 <div className="absolute bottom-0 left-0 w-full h-1.5 bg-white/10">
                                     <div
                                         className="h-full bg-primary shadow-[0_0_10px_rgba(var(--primary)/0.8)]"
@@ -98,8 +97,8 @@ export const ContinueWatching: React.FC = () => {
                                     />
                                 </div>
 
-                                <div className="absolute inset-0 bg-gradient-to-t from-black via-black/10 to-transparent flex flex-col justify-end p-6">
-                                    <h3 className="text-lg font-black text-white/90 truncate group-hover:text-white transition-colors tracking-tight uppercase italic leading-none mb-1">
+                                <div className="absolute inset-0 bg-gradient-to-t from-black via-black/20 to-transparent flex flex-col justify-end p-4">
+                                    <h3 className="text-base font-black text-white/90 line-clamp-2 group-hover:text-primary transition-colors tracking-tight uppercase italic leading-none mb-2">
                                         {item.video.title}
                                     </h3>
                                     <p className="text-[9px] text-primary font-black uppercase tracking-widest flex items-center gap-2">
