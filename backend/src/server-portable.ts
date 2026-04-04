@@ -372,6 +372,97 @@ function detectPortugueseAffinity(input: { title?: string | null; description?: 
     };
 }
 
+function parseArconteHeuristic(raw?: string | null) {
+    if (!raw) return null;
+    try {
+        return JSON.parse(raw);
+    } catch {
+        return null;
+    }
+}
+
+async function enrichDiscoveryItemsWithArconteSignals(items: any[]) {
+    const titleKeys = Array.from(new Set(
+        items
+            .map((item) => `arconte:heuristic:title:${item.kind === 'series' ? 'series' : 'movie'}:${normalizeText(item.title)}`)
+            .filter(Boolean)
+    ));
+
+    if (!titleKeys.length) return items;
+
+    const rows = await prisma.systemStats.findMany({
+        where: { key: { in: titleKeys } },
+    }).catch(() => []);
+
+    const signalMap = new Map<string, any>();
+    for (const row of rows) {
+        signalMap.set(row.key, parseArconteHeuristic(row.valueString));
+    }
+
+    return items.map((item) => {
+        const key = `arconte:heuristic:title:${item.kind === 'series' ? 'series' : 'movie'}:${normalizeText(item.title)}`;
+        const signal = signalMap.get(key);
+        if (!signal) return item;
+
+        const wins = Number(signal?.wins || 0);
+        const ptBrWins = Number(signal?.ptBrWins || 0);
+        const avgAvailability = wins > 0 ? Number(signal?.totalAvailability || 0) / wins : 0;
+        const trustLevel = ptBrWins >= 2 || avgAvailability >= 65
+            ? 'high'
+            : wins >= 2 || avgAvailability >= 30
+                ? 'medium'
+                : 'low';
+        const trustLabel = trustLevel === 'high'
+            ? 'Arconte confia'
+            : trustLevel === 'medium'
+                ? 'Bom historico'
+                : 'Aprendendo';
+
+        return {
+            ...item,
+            arconteTrust: trustLevel,
+            arconteTrustLabel: trustLabel,
+        };
+    });
+}
+
+function detectCatalogReadinessAffinity(input: {
+    title?: string | null;
+    tags?: string[] | string | null;
+    status?: string | null;
+    quality?: string | null;
+    sourceSite?: string | null;
+    hasDubbed?: boolean;
+    hasPortuguese?: boolean;
+    hasPortugueseAudio?: boolean;
+    hasPortugueseSubs?: boolean;
+}) {
+    const tagList = splitTags(input.tags).map(normalizeText);
+    const sourceSite = normalizeText(input.sourceSite);
+    const title = normalizeText(input.title);
+    const quality = normalizeText(input.quality);
+    const portuguese = detectPortugueseAffinity(input);
+    const fromAddonRadar = tagList.includes('addon radar') || tagList.includes('resolvedsource');
+    const fromTrustedSource = /brazuca|torrentio|thepiratebay|top streaming|nexus/.test(sourceSite)
+        || tagList.some((tag) => /brazuca|torrentio|thepiratebay|top streaming|nexus/.test(tag));
+    const strongQuality = /2160|4k/.test(quality) ? 20 : /1080/.test(quality) ? 14 : /720/.test(quality) ? 8 : 0;
+    const catalogReady = input.status === 'READY' || (input.status === 'CATALOG' && (portuguese.portuguese || fromAddonRadar || fromTrustedSource));
+    const clickReadyScore =
+        (fromAddonRadar ? 18 : 0)
+        + (fromTrustedSource ? 12 : 0)
+        + (catalogReady ? 16 : 0)
+        + (portuguese.dubbed ? 18 : portuguese.subtitled ? 8 : 0)
+        + strongQuality
+        + (/dublado|pt br|pt-br|dual audio|legendado/.test(title) ? 10 : 0);
+
+    return {
+        fromAddonRadar,
+        fromTrustedSource,
+        catalogReady,
+        clickReadyScore,
+    };
+}
+
 function detectFamilyAffinity(input: { title?: string | null; description?: string | null; tags?: string[] | string | null; category?: string | null; }) {
     const haystack = normalizeText([
         input.title,
@@ -489,11 +580,221 @@ function getDayMoment() {
     return 'late-night';
 }
 
+const TITLE_FAMILY_STOPWORDS = new Set([
+    'the', 'and', 'with', 'from', 'para', 'com', 'uma', 'um', 'dos', 'das', 'de', 'do', 'da', 'del', 'los', 'las',
+    'movie', 'movies', 'film', 'filme', 'filmes', 'serie', 'series', 'season', 'temporada', 'episode', 'episodio',
+    'part', 'parte', 'volume', 'vol', 'edition', 'edicao', 'original', 'complete', 'completo', 'completeza',
+]);
+
+function getTitleFamilyTokens(title?: string) {
+    return normalizeText(title)
+        .replace(/\b(19|20)\d{2}\b/g, ' ')
+        .split(/[^a-z0-9]+/g)
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 3 && !TITLE_FAMILY_STOPWORDS.has(token) && !/^\d+$/.test(token));
+}
+
+function addWeightedValues(target: Record<string, number>, values: Array<string | null | undefined>, weight: number) {
+    for (const value of values) {
+        const key = normalizeText(value);
+        if (!key) continue;
+        target[key] = (target[key] || 0) + weight;
+    }
+}
+
+function parseStoredTasteProfile(raw?: string | null) {
+    if (!raw) {
+        return {
+            categories: {} as Record<string, number>,
+            tags: {} as Record<string, number>,
+            titleFamilies: {} as Record<string, number>,
+        };
+    }
+
+    try {
+        const parsed = JSON.parse(raw);
+        if (
+            parsed &&
+            typeof parsed === 'object' &&
+            ('categories' in parsed || 'tags' in parsed || 'titleFamilies' in parsed)
+        ) {
+            return {
+                categories: parsed.categories || {},
+                tags: parsed.tags || {},
+                titleFamilies: parsed.titleFamilies || {},
+            };
+        }
+
+        return {
+            categories: parsed || {},
+            tags: {},
+            titleFamilies: {},
+        };
+    } catch {
+        return {
+            categories: {} as Record<string, number>,
+            tags: {} as Record<string, number>,
+            titleFamilies: {} as Record<string, number>,
+        };
+    }
+}
+
+function mergeStoredWeights(target: Record<string, number>, source: Record<string, number>, multiplier = 1) {
+    Object.entries(source || {}).forEach(([key, value]) => {
+        const normalizedKey = normalizeText(key);
+        const numericValue = Number(value || 0);
+        if (!normalizedKey || numericValue <= 0) return;
+        target[normalizedKey] = (target[normalizedKey] || 0) + (numericValue * multiplier);
+    });
+}
+
+async function refreshUserTasteProfile(userId: string) {
+    const [history, favorites, watchSessions, videos] = await Promise.all([
+        prisma.playbackHistory.findMany({
+            where: { userId },
+            include: { video: true },
+            orderBy: { updatedAt: 'desc' },
+            take: 40,
+        }).catch(() => []),
+        prisma.favorite.findMany({
+            where: { userId },
+            include: { video: true },
+            orderBy: { createdAt: 'desc' },
+            take: 40,
+        }).catch(() => []),
+        (prisma as any).watchSession.findMany({
+            where: { userId },
+            orderBy: { createdAt: 'desc' },
+            take: 120,
+        }).catch(() => []),
+        prisma.video.findMany({
+            select: {
+                id: true,
+                title: true,
+                tags: true,
+                category: true,
+                quality: true,
+                hasPortugueseAudio: true,
+                hasPortugueseSubs: true,
+                hasDubbed: true,
+            },
+            take: 400,
+        }).catch(() => []),
+    ]);
+
+    const videosById = new Map(videos.map((video: any) => [video.id, video]));
+    const categories: Record<string, number> = {};
+    const tags: Record<string, number> = {};
+    const titleFamilies: Record<string, number> = {};
+    const languageSignals: Record<string, number> = {};
+
+    history.forEach((entry: any) => {
+        addWeightedValues(categories, [entry.video?.category], 1.5);
+        addWeightedValues(tags, splitTags(entry.video?.tags), 1.25);
+        addWeightedValues(titleFamilies, getTitleFamilyTokens(entry.video?.title), 1.5);
+        addWeightedValues(languageSignals, [
+            entry.video?.hasPortugueseAudio ? 'audio-pt-br' : null,
+            entry.video?.hasPortugueseSubs ? 'subtitle-pt-br' : null,
+            entry.video?.hasDubbed ? 'dubbed' : null,
+        ], 1.5);
+    });
+
+    favorites.forEach((entry: any) => {
+        addWeightedValues(categories, [entry.video?.category], 3);
+        addWeightedValues(tags, splitTags(entry.video?.tags), 2.5);
+        addWeightedValues(titleFamilies, getTitleFamilyTokens(entry.video?.title), 3.5);
+        addWeightedValues(languageSignals, [
+            entry.video?.hasPortugueseAudio ? 'audio-pt-br' : null,
+            entry.video?.hasPortugueseSubs ? 'subtitle-pt-br' : null,
+            entry.video?.hasDubbed ? 'dubbed' : null,
+        ], 2.5);
+    });
+
+    watchSessions.forEach((entry: any) => {
+        const watchedVideo = videosById.get(entry.videoId);
+        if (!watchedVideo) return;
+
+        const sessionWeight = entry.completed
+            ? 3
+            : entry.abandoned
+                ? 0.4
+                : Number(entry.duration || 0) >= 1800
+                    ? 2.1
+                    : 1.2;
+
+        addWeightedValues(categories, [watchedVideo.category], sessionWeight);
+        addWeightedValues(tags, splitTags(watchedVideo.tags), Math.max(0.5, sessionWeight - 0.25));
+        addWeightedValues(titleFamilies, getTitleFamilyTokens(watchedVideo.title), sessionWeight + 0.5);
+        addWeightedValues(languageSignals, [
+            watchedVideo.hasPortugueseAudio ? 'audio-pt-br' : null,
+            watchedVideo.hasPortugueseSubs ? 'subtitle-pt-br' : null,
+            watchedVideo.hasDubbed ? 'dubbed' : null,
+        ], Math.max(0.5, sessionWeight));
+    });
+
+    const totalSessions = watchSessions.length || 1;
+    const completedSessions = watchSessions.filter((entry: any) => !!entry.completed).length;
+    const avgSessionTime = watchSessions.length
+        ? watchSessions.reduce((sum: number, entry: any) => sum + Number(entry.duration || 0), 0) / watchSessions.length
+        : 0;
+
+    const topCategory = Object.entries(categories).sort((a, b) => b[1] - a[1])[0]?.[0];
+    const topQuality = videos
+        .map((video: any) => inferQuality(video.quality, video.title))
+        .filter(Boolean)
+        .reduce((acc: Record<string, number>, quality: string) => {
+            acc[quality] = (acc[quality] || 0) + 1;
+            return acc;
+        }, {});
+    const preferredQuality = Object.entries(topQuality).sort((a, b) => b[1] - a[1])[0]?.[0] || '1080p';
+    const avgBandwidth = watchSessions.length
+        ? watchSessions.reduce((sum: number, entry: any) => sum + Number(entry.avgBitrate || 0), 0) / watchSessions.length
+        : 0;
+
+    await (prisma as any).userProfile.upsert({
+        where: { userId },
+        create: {
+            userId,
+            preferredGenres: JSON.stringify({
+                categories,
+                tags,
+                titleFamilies,
+                languageSignals,
+                topCategory,
+                preferredQuality,
+                updatedAt: new Date().toISOString(),
+            }),
+            avgSessionTime,
+            completionRate: completedSessions / totalSessions,
+            preferredQuality,
+            avgBandwidth,
+            lastActive: new Date(),
+        },
+        update: {
+            preferredGenres: JSON.stringify({
+                categories,
+                tags,
+                titleFamilies,
+                languageSignals,
+                topCategory,
+                preferredQuality,
+                updatedAt: new Date().toISOString(),
+            }),
+            avgSessionTime,
+            completionRate: completedSessions / totalSessions,
+            preferredQuality,
+            avgBandwidth,
+            lastActive: new Date(),
+        },
+    }).catch(() => null);
+}
+
 function getVideoDiscoveryScore(video: any, context: {
     preferredCategories?: string[];
     preferredTags?: string[];
     preferredCategoryWeights?: Record<string, number>;
     preferredTagWeights?: Record<string, number>;
+    preferredTitleFamilyWeights?: Record<string, number>;
     favoriteVideoIds?: string[];
     recentVideoIds?: string[];
     completedVideoIds?: string[];
@@ -508,6 +809,7 @@ function getVideoDiscoveryScore(video: any, context: {
     const family = detectFamilyAffinity(video);
     const kids = detectKidsAffinity(video);
     const adult = detectAdultAffinity(video);
+    const sourceAffinity = detectCatalogReadinessAffinity(video);
     const category = inferCategory(video.category, video.tags, video.title);
     const normalizedTags = splitTags(video.tags).map(normalizeText);
     const preferredCategoryBoost = (context.preferredCategories || []).some((item) => normalizeText(item) === normalizeText(category)) ? 20 : 0;
@@ -515,18 +817,19 @@ function getVideoDiscoveryScore(video: any, context: {
     const metadataBonus = video.thumbnailPath ? 10 : 0;
     const weightedCategoryBoost = getWeightedBoost(context.preferredCategoryWeights, [category], 28, 8);
     const weightedTagBoost = getWeightedBoost(context.preferredTagWeights, normalizedTags, 24, 4);
+    const weightedTitleFamilyBoost = getWeightedBoost(context.preferredTitleFamilyWeights, getTitleFamilyTokens(video.title), 26, 6);
     const favoriteBoost = (context.favoriteVideoIds || []).includes(video.id) ? 18 : 0;
     const repeatPenalty = (context.recentVideoIds || []).includes(video.id) ? 22 : 0;
     const completionBoost = (context.completedVideoIds || []).includes(video.id) ? 16 : 0;
     const abandonPenalty = (context.abandonedVideoIds || []).includes(video.id) ? 28 : 0;
-    const readinessBonus = video.status === 'READY' && portuguese.portuguese ? 14 : 0;
+    const readinessBonus = (video.status === 'READY' && portuguese.portuguese ? 14 : 0) + sourceAffinity.clickReadyScore;
     const profileBoost =
         context.audienceProfile === 'kids' ? (kids.score * 2 + family.score + (adult.adult ? -40 : 0)) :
             context.audienceProfile === 'family' ? (family.score * 2 + portuguese.score + (adult.adult ? -20 : 0)) :
                 context.audienceProfile === 'adult' ? (adult.score * 2 + (kids.kids ? -24 : 0)) :
                     0;
 
-    return statusWeight + freshness + popularity + portuguese.score + family.score + kids.score + preferredCategoryBoost + preferredTagBoost + weightedCategoryBoost + weightedTagBoost + favoriteBoost + completionBoost + readinessBonus + metadataBonus + profileBoost - repeatPenalty - abandonPenalty;
+    return statusWeight + freshness + popularity + portuguese.score + family.score + kids.score + preferredCategoryBoost + preferredTagBoost + weightedCategoryBoost + weightedTagBoost + weightedTitleFamilyBoost + favoriteBoost + completionBoost + readinessBonus + metadataBonus + profileBoost - repeatPenalty - abandonPenalty;
 }
 
 function getSeriesDiscoveryScore(series: any, context: {
@@ -534,6 +837,7 @@ function getSeriesDiscoveryScore(series: any, context: {
     preferredTags?: string[];
     preferredCategoryWeights?: Record<string, number>;
     preferredTagWeights?: Record<string, number>;
+    preferredTitleFamilyWeights?: Record<string, number>;
     audienceProfile?: string;
 } = {}) {
     const freshnessHours = Math.max(1, (Date.now() - new Date(series.updatedAt || series.createdAt).getTime()) / (1000 * 60 * 60));
@@ -564,19 +868,27 @@ function getSeriesDiscoveryScore(series: any, context: {
         tags: series.genres,
         category: 'Series',
     });
+    const sourceAffinity = detectCatalogReadinessAffinity({
+        title: series.title,
+        tags: series.genres,
+        status: series.status,
+        quality: `${series.totalEpisodes || 0} episodios`,
+        sourceSite: Array.isArray(series.genres) ? series.genres.join(',') : series.genres,
+    });
     const preferredCategoryBoost = (context.preferredCategories || []).some((item) => normalizeText(item) === 'series') ? 20 : 0;
     const normalizedGenres = splitTags(series.genres).map(normalizeText);
     const preferredTagBoost = normalizedGenres.some((tag) => (context.preferredTags || []).includes(tag)) ? 12 : 0;
     const metadataBonus = series.poster || series.backdrop ? 15 : 0;
     const weightedCategoryBoost = getWeightedBoost(context.preferredCategoryWeights, ['Series'], 28, 8);
     const weightedTagBoost = getWeightedBoost(context.preferredTagWeights, normalizedGenres, 24, 4);
+    const weightedTitleFamilyBoost = getWeightedBoost(context.preferredTitleFamilyWeights, getTitleFamilyTokens(series.title), 24, 6);
     const profileBoost =
         context.audienceProfile === 'kids' ? (kids.score * 2 + family.score + (adult.adult ? -40 : 0)) :
             context.audienceProfile === 'family' ? (family.score * 2 + portuguese.score + (adult.adult ? -20 : 0)) :
                 context.audienceProfile === 'adult' ? (adult.score * 2 + (kids.kids ? -24 : 0)) :
                     0;
 
-    return freshness + progress + completeness + portuguese.score + family.score + kids.score + preferredCategoryBoost + preferredTagBoost + weightedCategoryBoost + weightedTagBoost + metadataBonus + profileBoost;
+    return freshness + progress + completeness + portuguese.score + family.score + kids.score + preferredCategoryBoost + preferredTagBoost + weightedCategoryBoost + weightedTagBoost + weightedTitleFamilyBoost + metadataBonus + profileBoost + sourceAffinity.clickReadyScore;
 }
 
 function toDiscoveryVideoItem(video: any, score: number) {
@@ -584,6 +896,7 @@ function toDiscoveryVideoItem(video: any, score: number) {
     const kids = detectKidsAffinity(video);
     const family = detectFamilyAffinity(video);
     const adult = detectAdultAffinity(video);
+    const sourceAffinity = detectCatalogReadinessAffinity(video);
     return {
         kind: 'video',
         id: video.id,
@@ -592,7 +905,13 @@ function toDiscoveryVideoItem(video: any, score: number) {
         image: video.thumbnailPath,
         backdrop: video.thumbnailPath,
         href: `/videos/${video.id}`,
-        badge: portuguese.dubbed ? 'Dublado' : portuguese.subtitled ? 'Legendado PT-BR' : (video.status || 'Nexus'),
+        badge: portuguese.dubbed
+            ? 'Dublado'
+            : sourceAffinity.fromAddonRadar && video.status === 'CATALOG'
+                ? 'Radar PT-BR'
+                : portuguese.subtitled
+                    ? 'Legendado PT-BR'
+                    : (video.status || 'Nexus'),
         score,
         status: video.status,
         category: inferCategory(video.category, video.tags, video.title),
@@ -604,6 +923,8 @@ function toDiscoveryVideoItem(video: any, score: number) {
         isKidsSafe: kids.kids,
         isFamilySafe: family.family || kids.kids,
         isAdult: adult.adult,
+        isCatalogBoosted: sourceAffinity.fromAddonRadar || sourceAffinity.fromTrustedSource,
+        clickReadyScore: sourceAffinity.clickReadyScore,
         safetyLabel: kids.kids ? 'kids-safe' : family.family ? 'family-safe' : adult.adult ? 'adult' : 'general',
         tags: splitTags(video.tags),
         createdAt: video.createdAt,
@@ -635,6 +956,13 @@ function toDiscoverySeriesItem(series: any, score: number) {
         tags: series.genres,
         category: 'Series',
     });
+    const sourceAffinity = detectCatalogReadinessAffinity({
+        title: series.title,
+        tags: series.genres,
+        status: series.status,
+        quality: `${series.totalEpisodes || 0} episodios`,
+        sourceSite: Array.isArray(series.genres) ? series.genres.join(',') : series.genres,
+    });
     return {
         kind: 'series',
         id: series.id,
@@ -643,7 +971,11 @@ function toDiscoverySeriesItem(series: any, score: number) {
         image: series.poster || series.backdrop,
         backdrop: series.backdrop || series.poster,
         href: `/series/${series.id}`,
-        badge: portuguese.dubbed ? 'Série em português' : `${series.totalSeasons || 0} temporadas`,
+        badge: portuguese.dubbed
+            ? 'Série em português'
+            : sourceAffinity.fromAddonRadar
+                ? 'Radar PT-BR'
+                : `${series.totalSeasons || 0} temporadas`,
         score,
         status: series.status,
         category: 'Series',
@@ -655,6 +987,8 @@ function toDiscoverySeriesItem(series: any, score: number) {
         isKidsSafe: kids.kids,
         isFamilySafe: family.family || kids.kids,
         isAdult: adult.adult,
+        isCatalogBoosted: sourceAffinity.fromAddonRadar || sourceAffinity.fromTrustedSource,
+        clickReadyScore: sourceAffinity.clickReadyScore,
         safetyLabel: kids.kids ? 'kids-safe' : family.family ? 'family-safe' : adult.adult ? 'adult' : 'general',
         tags: splitTags(series.genres),
         createdAt: series.updatedAt || series.createdAt,
@@ -728,6 +1062,12 @@ function buildDiscoveryRows(items: any[], context: {
     const series = dedupeByTitle(items.filter(item => item.kind === 'series'));
     const portugueseFirst = diversifyItems(items.filter(item => item.isPortuguese), 18);
     const dubbedFirst = diversifyItems(items.filter(item => item.isDubbed), 18);
+    const catalogRadar = diversifyItems(
+        items
+            .filter((item) => item.kind === 'video' && item.status === 'CATALOG' && (item.isPortuguese || item.isCatalogBoosted || Number(item.clickReadyScore || 0) >= 24))
+            .sort((a, b) => (Number(b.clickReadyScore || 0) + b.score) - (Number(a.clickReadyScore || 0) + a.score)),
+        18
+    );
     const kidsFirst = diversifyItems(items.filter((item) => detectKidsAffinity(item).kids).sort((a, b) => b.score - a.score), 18);
     const familyFirst = diversifyItems(items.filter((item) => detectFamilyAffinity(item).family).sort((a, b) => b.score - a.score), 18);
     const adultNight = diversifyItems(items.filter((item) => detectAdultAffinity(item).adult).sort((a, b) => b.score - a.score), 18);
@@ -735,6 +1075,10 @@ function buildDiscoveryRows(items: any[], context: {
     const trending = diversifyItems([...items].sort((a, b) => b.score - a.score), 18);
     const continueWatching = dedupeByTitle(context.continueWatching || []).slice(0, 18);
     const becauseYouLike = diversifyItems(context.preferredItems || [], 18);
+    const houseAffinity = diversifyItems(
+        [...(context.preferredItems || [])].sort((a, b) => ((Number(b.clickReadyScore || 0) + b.score) - (Number(a.clickReadyScore || 0) + a.score))),
+        18
+    );
     const quickSession = diversifyItems(items.filter((item) => detectSessionFit(item).quick).sort((a, b) => b.score - a.score), 18);
     const marathonMode = diversifyItems(items.filter((item) => detectSessionFit(item).marathon).sort((a, b) => b.score - a.score), 18);
     const prefersMarathon = Number(context.avgSessionTime || 0) >= 3600 || Number(context.completionRate || 0) >= 0.65;
@@ -752,6 +1096,12 @@ function buildDiscoveryRows(items: any[], context: {
             title: 'Em português para sua família',
             subtitle: 'Onde o Orion deve insistir primeiro: dublado, PT-BR e fácil de apertar play.',
             items: dubbedFirst.length > 0 ? dubbedFirst : portugueseFirst,
+        },
+        {
+            id: 'catalog-radar',
+            title: 'Catálogo com maior chance de rodar',
+            subtitle: 'Itens já enriquecidos pelo Arconte com radar de addons, PT-BR e melhor chance de play.',
+            items: catalogRadar,
         },
         {
             id: 'kids-safe',
@@ -776,6 +1126,12 @@ function buildDiscoveryRows(items: any[], context: {
             title: 'Porque combina com o que vocês assistem',
             subtitle: 'O Orion puxando gêneros e sinais do seu próprio histórico.',
             items: becauseYouLike,
+        },
+        {
+            id: 'house-affinity',
+            title: 'Do jeito da sua casa',
+            subtitle: 'Títulos que parecem com o que vocês realmente abrem, favoritam e terminam.',
+            items: houseAffinity,
         },
         {
             id: 'quick-session',
@@ -910,6 +1266,26 @@ async function buildDiscoveryFeed(userId?: string, audienceProfile = 'house') {
             : Promise.resolve(null),
     ]);
 
+    const videosById = new Map(videosRaw.map((video: any) => [video.id, video]));
+    if (
+        userId &&
+        (history.length > 0 || favorites.length > 0 || watchSessions.length > 0) &&
+        (
+            !userProfile ||
+            !userProfile.updatedAt ||
+            (Date.now() - new Date(userProfile.updatedAt).getTime()) > (1000 * 60 * 60 * 6)
+        )
+    ) {
+        refreshUserTasteProfile(userId).catch(() => null);
+    }
+    const storedTasteProfile = parseStoredTasteProfile(userProfile?.preferredGenres);
+    const storedTasteRaw = (() => {
+        try {
+            return userProfile?.preferredGenres ? JSON.parse(userProfile.preferredGenres) : {};
+        } catch {
+            return {};
+        }
+    })();
     const preferredCategories = history.map((entry: any) => entry.video?.category).filter(Boolean);
     const preferredTags = history
         .flatMap((entry: any) => splitTags(entry.video?.tags))
@@ -924,6 +1300,34 @@ async function buildDiscoveryFeed(userId?: string, audienceProfile = 'house') {
         acc[tag] = (acc[tag] || 0) + 1;
         return acc;
     }, {});
+    const preferredTitleFamilyWeights: Record<string, number> = {};
+    mergeStoredWeights(preferredCategoryWeights, storedTasteProfile.categories, 0.85);
+    mergeStoredWeights(preferredTagWeights, storedTasteProfile.tags, 0.8);
+    mergeStoredWeights(preferredTitleFamilyWeights, storedTasteProfile.titleFamilies, 0.9);
+    history.forEach((entry: any) => {
+        addWeightedValues(preferredTitleFamilyWeights, getTitleFamilyTokens(entry.video?.title), 1.5);
+        addWeightedValues(preferredTagWeights, splitTags(entry.video?.tags), 1.25);
+        addWeightedValues(preferredCategoryWeights, [entry.video?.category], 1.15);
+    });
+    favorites.forEach((entry: any) => {
+        addWeightedValues(preferredTitleFamilyWeights, getTitleFamilyTokens(entry.video?.title), 3.5);
+        addWeightedValues(preferredTagWeights, splitTags(entry.video?.tags), 2.5);
+        addWeightedValues(preferredCategoryWeights, [entry.video?.category], 2.75);
+    });
+    watchSessions
+        .filter((entry: any) => !!entry.completed || Number(entry.progress || 0) >= 0.75)
+        .forEach((entry: any) => {
+            const watchedVideo = videosById.get(entry.videoId);
+            addWeightedValues(preferredTitleFamilyWeights, getTitleFamilyTokens(watchedVideo?.title), 2.75);
+            addWeightedValues(preferredTagWeights, splitTags(watchedVideo?.tags), 2.25);
+            addWeightedValues(preferredCategoryWeights, [watchedVideo?.category], 2.25);
+        });
+    const persistentCategories = Object.keys(storedTasteProfile.categories || {})
+        .filter((key) => Number(storedTasteProfile.categories[key] || 0) >= 1.5);
+    const persistentTags = Object.keys(storedTasteProfile.tags || {})
+        .filter((key) => Number(storedTasteProfile.tags[key] || 0) >= 1.5);
+    preferredCategories.push(...persistentCategories);
+    preferredTags.push(...persistentTags);
     const favoriteVideoIds = favorites.map((entry: any) => entry.videoId).filter(Boolean);
     const recentVideoIds = history.map((entry: any) => entry.videoId).filter(Boolean);
     const completedVideoIds = Array.from(new Set(
@@ -938,9 +1342,14 @@ async function buildDiscoveryFeed(userId?: string, audienceProfile = 'house') {
             .map((entry: any) => entry.videoId)
             .filter(Boolean)
     ));
-    const familySignal = preferredTags.filter((tag) => /familia|family|infantil|kids|animacao|anime|aventura|comedia/.test(tag)).length;
-    const adultSignal = preferredTags.filter((tag) => /terror|horror|thriller|crime|suspense|guerra|adult/.test(tag)).length;
+    const familySignal = preferredTags.filter((tag) => /familia|family|infantil|kids|animacao|anime|aventura|comedia/.test(tag)).length
+        + Object.entries(storedTasteProfile.tags || {}).filter(([tag]) => /familia|family|infantil|kids|animacao|anime|aventura|comedia/.test(tag)).length;
+    const adultSignal = preferredTags.filter((tag) => /terror|horror|thriller|crime|suspense|guerra|adult/.test(tag)).length
+        + Object.entries(storedTasteProfile.tags || {}).filter(([tag]) => /terror|horror|thriller|crime|suspense|guerra|adult/.test(tag)).length;
     const dayMoment = getDayMoment();
+    const persistentPortugueseSignal = Number(storedTasteRaw?.languageSignals?.['audio-pt-br'] || 0)
+        + Number(storedTasteRaw?.languageSignals?.dubbed || 0)
+        + Number(storedTasteRaw?.languageSignals?.['subtitle-pt-br'] || 0);
 
     const scoredVideos = videosRaw
         .map((video: any) => toDiscoveryVideoItem(video, getVideoDiscoveryScore(video, {
@@ -948,6 +1357,7 @@ async function buildDiscoveryFeed(userId?: string, audienceProfile = 'house') {
             preferredTags,
             preferredCategoryWeights,
             preferredTagWeights,
+            preferredTitleFamilyWeights,
             favoriteVideoIds,
             recentVideoIds,
             completedVideoIds,
@@ -972,17 +1382,21 @@ async function buildDiscoveryFeed(userId?: string, audienceProfile = 'house') {
             preferredTags,
             preferredCategoryWeights,
             preferredTagWeights,
+            preferredTitleFamilyWeights,
             audienceProfile,
         })))
         .filter((item: any) => !!item.image)
         .sort((a: any, b: any) => b.score - a.score);
 
+    const enrichedVideos = await enrichDiscoveryItemsWithArconteSignals(scoredVideos);
+    const enrichedSeries = await enrichDiscoveryItemsWithArconteSignals(scoredSeries);
+
     const visibilityFilteredVideos = audienceProfile === 'kids'
-        ? scoredVideos.filter((item: any) => !item.isAdult)
-        : scoredVideos;
+        ? enrichedVideos.filter((item: any) => !item.isAdult)
+        : enrichedVideos;
     const visibilityFilteredSeries = audienceProfile === 'kids'
-        ? scoredSeries.filter((item: any) => !item.isAdult)
-        : scoredSeries;
+        ? enrichedSeries.filter((item: any) => !item.isAdult)
+        : enrichedSeries;
 
     const allItems = [...visibilityFilteredVideos, ...visibilityFilteredSeries].sort((a, b) => b.score - a.score);
     const continueWatching = history
@@ -998,9 +1412,11 @@ async function buildDiscoveryFeed(userId?: string, audienceProfile = 'house') {
     const preferredItems = allItems.filter((item: any) => {
         const normalizedCategory = normalizeText(item.category);
         const itemTags = (item.tags || []).map(normalizeText);
+        const titleTokens = getTitleFamilyTokens(item.title);
         return !abandonedVideoIds.includes(item.id) && (
             preferredCategories.some((category) => normalizeText(category) === normalizedCategory)
             || itemTags.some((tag: string) => preferredTags.includes(tag))
+            || titleTokens.some((token) => Number(preferredTitleFamilyWeights[token] || 0) >= 2)
         );
     });
     const rows = buildDiscoveryRows(allItems, {
@@ -1012,12 +1428,14 @@ async function buildDiscoveryFeed(userId?: string, audienceProfile = 'house') {
         familyHeavy: familySignal >= adultSignal,
         adultHeavy: adultSignal > familySignal,
         audienceProfile,
+        prefersPortuguese: persistentPortugueseSignal > 2 || preferredTags.some((tag) => /(dublado|pt-br|portugues|legendado)/.test(tag)),
     });
     const featured = chooseFeaturedItem(allItems, {
         dayMoment,
         familyHeavy: familySignal >= adultSignal,
         adultHeavy: adultSignal > familySignal,
         audienceProfile,
+        prefersPortuguese: persistentPortugueseSignal > 2 || preferredTags.some((tag) => /(dublado|pt-br|portugues|legendado)/.test(tag)),
     }) || dubbedFirstChoice(allItems) || allItems[0] || null;
 
     return {
@@ -1265,11 +1683,13 @@ app.post('/api/v1/users/:userId/favorites/:videoId', async (req, res) => {
             await prisma.favorite.delete({
                 where: { videoId_userId: { videoId, userId } }
             });
+            refreshUserTasteProfile(userId).catch(() => null);
             return res.json({ favorited: false });
         } else {
             await prisma.favorite.create({
                 data: { videoId, userId }
             });
+            refreshUserTasteProfile(userId).catch(() => null);
             return res.json({ favorited: true });
         }
     } catch (e) {
@@ -1300,6 +1720,7 @@ app.post('/api/v1/videos/:id/history', async (req, res) => {
             update: { lastTime },
             create: { videoId: id, userId, lastTime }
         });
+        refreshUserTasteProfile(userId).catch(() => null);
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: 'Failed to save history' });
@@ -1538,7 +1959,21 @@ app.post('/api/v1/videos/:id/play', async (req, res) => {
             return res.json({ status: 'READY', video });
         }
 
-        const resolvedSource = await resolveMovieMaterializationSource(video);
+        const requestedMagnet = typeof req.body?.magnetURI === 'string' ? req.body.magnetURI : null;
+        const requestedInfoHash = typeof req.body?.infoHash === 'string' ? req.body.infoHash : null;
+        const directMagnet = requestedMagnet || buildBasicMagnet(requestedInfoHash);
+        const requestedSourceSite = typeof req.body?.sourceSite === 'string' ? req.body.sourceSite : null;
+        const requestedQuality = typeof req.body?.quality === 'string' ? req.body.quality : null;
+        const requestedLanguage = typeof req.body?.language === 'string' ? req.body.language : null;
+
+        const resolvedSource = directMagnet
+            ? {
+                magnetURI: directMagnet,
+                sourceSite: requestedSourceSite || 'addon-direct',
+                quality: requestedQuality || video.quality || null,
+                language: requestedLanguage || (video.hasPortugueseAudio ? 'pt-BR' : video.hasPortugueseSubs ? 'pt-BR-sub' : 'und'),
+            }
+            : await resolveMovieMaterializationSource(video);
         const magnetURI = resolvedSource?.magnetURI || null;
 
         if (!magnetURI) {

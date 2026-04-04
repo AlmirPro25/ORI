@@ -1,7 +1,6 @@
-
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import winston from 'winston';
-import { TMDBService } from './tmdb-service';
+import winston from "winston";
+import { TMDBService } from "./tmdb-service";
 
 const logger = winston.createLogger({
     format: winston.format.combine(
@@ -11,71 +10,67 @@ const logger = winston.createLogger({
     transports: [new winston.transports.Console()]
 });
 
-// API Key via variável de ambiente
 const apiKey = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash-lite";
 
 export class AIService {
     private model: any;
     private isConfigured: boolean;
+    private quotaCooldownUntil = 0;
 
     constructor() {
         if (!apiKey) {
-            logger.warn('[GEMINI] ⚠️ GEMINI_API_KEY não configurada. Enriquecimento por IA desabilitado.');
+            logger.warn("[GEMINI] GEMINI_API_KEY nao configurada. Enriquecimento por IA desabilitado.");
             this.isConfigured = false;
             return;
         }
+
         const genAI = new GoogleGenerativeAI(apiKey);
-        // UPGRADE: Modelo mais capaz para enriquecimento de metadados (Gemini 3.0 Pro)
         this.model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
         this.isConfigured = true;
-        logger.info('[GEMINI] ✅ Serviço de IA inicializado com sucesso.');
+        logger.info("[GEMINI] Servico de IA inicializado com sucesso.");
     }
 
     async enrichContent(title: string, rawDescription: string) {
-        // Se IA não disponível, usa fallbacks
-        if (!this.isConfigured) {
+        if (!this.isConfigured || this.isQuotaCoolingDown()) {
             return this.fallbackEnrichment(title, rawDescription);
         }
 
-        logger.info(`[GEMINI] 🧠 Analisando conteúdo: "${title}" para enriquecimento...`);
+        logger.info(`[GEMINI] Analisando conteudo: "${title}" para enriquecimento...`);
 
         const prompt = `
-        Você é um especialista em curadoria de cinema e streaming.
-        
-        Tarefa: Melhore os metadados para um filme/série extraído de um torrent.
-        Título Original do Torrent: "${title}".
+        Voce e um especialista em curadoria de cinema e streaming.
+
+        Tarefa: melhore os metadados para um filme/serie extraido de um torrent.
+        Titulo original do torrent: "${title}".
         Contexto original: "${rawDescription}".
 
         Gere um JSON estrito com os seguintes campos:
-        1. "titulo_limpo": O nome real do filme/série (ex: de "Sintel.2010.1080p" para "Sintel").
-        2. "sinopse": Um resumo atraente e profissional em Português do Brasil (máximo 3 linhas).
-        3. "categoria": A melhor categoria para este conteúdo (ex: Ação, Sci-Fi, Drama, Documentário, Animação).
-        4. "tags": Uma lista de 3 a 5 tags relevantes.
+        1. "titulo_limpo": o nome real do filme/serie.
+        2. "sinopse": um resumo atraente e profissional em Portugues do Brasil (maximo 3 linhas).
+        3. "categoria": a melhor categoria para este conteudo.
+        4. "tags": uma lista de 3 a 5 tags relevantes.
 
-        Responda APENAS com o JSON válido, sem markdown ou explicações adicionais.
+        Responda apenas com JSON valido.
         `;
 
         try {
             const result = await this.model.generateContent(prompt);
             const response = await result.response;
             const text = response.text();
-
-            const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+            const cleanText = text.replace(/```json/g, "").replace(/```/g, "").trim();
             const metadata = JSON.parse(cleanText);
 
-            logger.info(`[GEMINI] ✨ Conteúdo enriquecido: ${metadata.titulo_limpo} (${metadata.categoria})`);
+            logger.info(`[GEMINI] Conteudo enriquecido: ${metadata.titulo_limpo} (${metadata.categoria})`);
 
-            // Buscar poster via TMDB como fallback
             let posterUrl = null;
             try {
                 const tmdbResults = await TMDBService.search(metadata.titulo_limpo);
                 if (tmdbResults.length > 0) {
                     posterUrl = tmdbResults[0].backdrop_path || tmdbResults[0].poster_path;
-                    logger.info(`[GEMINI] 🖼️ Poster encontrado via TMDB: ${posterUrl}`);
                 }
-            } catch (e) {
-                logger.warn('[GEMINI] Fallback TMDB para poster falhou.');
+            } catch {
+                logger.warn("[GEMINI] Fallback TMDB para poster falhou.");
             }
 
             return {
@@ -86,129 +81,174 @@ export class AIService {
                 poster: posterUrl
             };
         } catch (error: any) {
-            logger.error(`[GEMINI] ❌ Falha ao enriquecer conteúdo: ${error.message}`);
+            this.handleQuotaError(error);
+            logger.error(`[GEMINI] Falha ao enriquecer conteudo: ${error?.message || error}`);
             return this.fallbackEnrichment(title, rawDescription);
         }
     }
 
     async decomposeSearchQuery(query: string): Promise<string[]> {
-        // Fallback inteligente sem IA: gerar variações PT-BR automaticamente
         const ptbrFallback = this.generatePTBRVariations(query);
 
-        if (!this.isConfigured) {
-            logger.info(`[SEARCH] 🇧🇷 Fallback PT-BR (sem IA): ${ptbrFallback.join(', ')}`);
+        if (!this.isConfigured || this.isQuotaCoolingDown()) {
+            logger.info(`[SEARCH] Fallback local ativo: ${ptbrFallback.join(" | ")}`);
             return ptbrFallback;
         }
 
-        logger.info(`[GEMINI] 🔍 Decompondo termo de busca: "${query}"...`);
+        logger.info(`[GEMINI] Decompondo termo de busca: "${query}"...`);
 
         const prompt = `
-        Você é um motor de busca de torrents brasileiro. 
-        O usuário quer encontrar: "${query}".
+        Voce e um motor de busca de torrents brasileiro.
+        O usuario quer encontrar: "${query}".
 
-        REGRAS OBRIGATÓRIAS:
-        1. SEMPRE inclua variações com "dublado" e "dual audio" para maximizar resultados PT-BR.
-        2. Se for um filme/série estrangeiro, inclua o nome ORIGINAL em inglês.
-        3. Se parecer ser uma SÉRIE DE TV:
-           - Inclua o nome da série + "complete" ou "season pack"
-           - Inclua variações como "S01E01", "temporada 1"
-           - Inclua o nome em inglês + "season"
-        4. Se for uma busca genérica (ex: "filmes de ação"), sugira 3-4 títulos populares que correspondam.
-        5. Inclua variações com e sem ano de lançamento.
-        6. NÃO inclua termos duplicados ou muito similares.
+        Regras obrigatorias:
+        1. Sempre inclua variacoes com "dublado", "dual audio" e "legendado" quando fizer sentido.
+        2. Se for um filme/serie estrangeiro, inclua o nome original em ingles.
+        3. Se parecer ser uma serie de TV, inclua:
+           - season pack / complete season
+           - temporada 1 / season 1
+           - S01E01 quando apropriado
+        4. Inclua variacoes com e sem ano de lancamento.
+        5. Nao inclua termos duplicados.
 
-        PRIORIDADE: Resultados em PT-BR (dublado/legendado) > Qualidade (1080p/4K) > Seeds
-
-        Retorne APENAS um array JSON de strings. Máximo 8 termos.
-        Exemplo: ["Breaking Bad dublado", "Breaking Bad dual audio", "Breaking Bad S01 complete", "Breaking Bad season pack 1080p"]
-        Responda SOMENTE o JSON, sem explicações.
+        Responda apenas com um array JSON de strings. Maximo 8 termos.
         `;
 
         try {
             const result = await this.model.generateContent(prompt);
             const response = await result.response;
             const text = response.text();
-
-            const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+            const cleanText = text.replace(/```json/g, "").replace(/```/g, "").trim();
             const terms = JSON.parse(cleanText);
 
             if (Array.isArray(terms) && terms.length > 0) {
-                // Garantir que o termo original está na lista
                 if (!terms.some((t: string) => t.toLowerCase() === query.toLowerCase())) {
                     terms.unshift(query);
                 }
-                // Mesclar com as variações PT-BR automáticas para garantir cobertura
                 const merged = [...new Set([...terms, ...ptbrFallback])];
-                logger.info(`[GEMINI] 🧠 Termos finais (${merged.length}): ${merged.join(' | ')}`);
-                return merged.slice(0, 10);
+                logger.info(`[GEMINI] Termos finais (${merged.length}): ${merged.join(" | ")}`);
+                return merged.slice(0, 12);
             }
+
             return ptbrFallback;
         } catch (error: any) {
-            logger.error(`[GEMINI] ❌ Falha ao decompor busca: ${error.message}`);
+            this.handleQuotaError(error);
+            logger.error(`[GEMINI] Falha ao decompor busca: ${error?.message || error}`);
             return ptbrFallback;
         }
     }
 
-    /**
-     * Gera variações PT-BR de um termo de busca SEM depender de IA.
-     * Funciona como fallback e como complemento à decomposição Gemini.
-     */
     private generatePTBRVariations(query: string): string[] {
-        const terms: string[] = [query];
-        const q = query.toLowerCase().trim();
+        const terms: string[] = [];
+        const raw = query.trim();
+        const lower = raw.toLowerCase();
+        const year = raw.match(/\b(19|20)\d{2}\b/)?.[0];
+        const hasPTBR = /(dublado|dual audio|dual-audio|pt-br|ptbr|portugu[eê]s|nacional|legendado|legenda pt)/i.test(lower);
+        const looksLikeSeries = /\b(temporada|season|epis[oó]dio|episode|s\d{1,2}(?:e\d{1,2})?)\b/i.test(lower);
+        const hasEpisodePattern = /\bs\d{1,2}e\d{1,2}\b/i.test(lower);
 
-        // Detectar se já tem indicadores PT-BR
-        const hasPTBR = /(dublado|dual|pt-br|ptbr|nacional|legendado)/i.test(q);
+        const add = (term?: string) => {
+            if (!term) return;
+            const normalized = term.replace(/\s+/g, " ").trim();
+            if (!normalized) return;
+            if (!terms.some(existing => existing.toLowerCase() === normalized.toLowerCase())) {
+                terms.push(normalized);
+            }
+        };
+
+        const cleanBase = raw
+            .replace(/[._]+/g, " ")
+            .replace(/\b(1080p|720p|2160p|4k|webrip|web-dl|bluray|brrip|x264|x265|hevc|10bit)\b/gi, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+
+        const withoutYear = cleanBase.replace(/\b(19|20)\d{2}\b/g, " ").replace(/\s+/g, " ").trim();
+        const noSubtitle = withoutYear.replace(/\s*[:\-]\s.*$/g, "").trim();
+        const noMovieSuffix = noSubtitle.replace(/\b(o filme|the movie|movie)\b/gi, "").replace(/\s+/g, " ").trim();
+        const baseCandidates = [raw, cleanBase, withoutYear, noSubtitle, noMovieSuffix].filter(Boolean);
+        const yearlessCandidates = baseCandidates.filter(candidate => !/\b(19|20)\d{2}\b/.test(candidate));
+
+        baseCandidates.forEach(add);
+
+        if (year) {
+            yearlessCandidates.forEach(candidate => add(`${candidate} ${year}`));
+        }
 
         if (!hasPTBR) {
-            terms.push(`${query} dublado`);
-            terms.push(`${query} dual audio`);
+            baseCandidates.forEach(candidate => {
+                add(`${candidate} dublado`);
+                add(`${candidate} dual audio`);
+                add(`${candidate} portugues`);
+                add(`${candidate} legendado`);
+            });
         }
 
-        // Detectar padrões de série (S01, temporada, season, etc.)
-        const seriesMatch = q.match(/(.+?)\s*(s\d{1,2}|season\s*\d|temporada\s*\d)/i);
-        if (seriesMatch) {
-            const seriesName = seriesMatch[1].trim();
-            terms.push(`${seriesName} complete pack`);
-            terms.push(`${seriesName} season pack dublado`);
+        baseCandidates.forEach(candidate => {
+            add(`${candidate} 1080p`);
+            add(`${candidate} web-dl`);
+            add(`${candidate} webrip`);
+        });
+
+        if (looksLikeSeries) {
+            const seriesBase = noMovieSuffix || noSubtitle || withoutYear || cleanBase || raw;
+            add(`${seriesBase} season 1`);
+            add(`${seriesBase} temporada 1`);
+            add(`${seriesBase} S01 complete`);
+            add(`${seriesBase} season pack`);
+            add(`${seriesBase} complete season`);
+            add(`${seriesBase} dublado`);
+            add(`${seriesBase} dual audio`);
+            if (!hasEpisodePattern) {
+                add(`${seriesBase} S01E01`);
+                add(`${seriesBase} episodio 1 dublado`);
+            }
         }
 
-        // Se não parecer ser um S01E01, mas for potencialmente uma série (sem ano)
-        // Adicionar variações de season pack
-        if (!seriesMatch && !q.match(/\b(19|20)\d{2}\b/)) {
-            terms.push(`${query} S01 complete`);
-            terms.push(`${query} season pack`);
+        return terms.slice(0, 14);
+    }
+
+    private isQuotaCoolingDown(): boolean {
+        return Date.now() < this.quotaCooldownUntil;
+    }
+
+    private handleQuotaError(error: any) {
+        const message = String(error?.message || "");
+        const status = Number(error?.status || error?.response?.status || 0);
+        const isQuotaError =
+            status === 429 ||
+            /429|quota|resource_exhausted|too many requests/i.test(message);
+
+        if (!isQuotaError) {
+            return;
         }
 
-        // Adicionar variação com qualidade
-        if (!q.includes('1080p') && !q.includes('4k') && !q.includes('720p')) {
-            terms.push(`${query} 1080p`);
-        }
-
-        return [...new Set(terms)]; // Remove duplicatas
+        const cooldownMs = 15 * 60 * 1000;
+        this.quotaCooldownUntil = Date.now() + cooldownMs;
+        logger.warn(`[GEMINI] Cota atingida. Ativando heuristica local por ${Math.round(cooldownMs / 60000)} min.`);
     }
 
     private async fallbackEnrichment(title: string, rawDescription: string) {
         const cleanTitle = title
-            .replace(/\./g, ' ')
-            .replace(/\[[^\]]*\]/g, ' ')
-            .replace(/\([^\)]*\)/g, ' ')
-            .replace(/\d{4}.*$/i, '')
-            .replace(/\s+/g, ' ')
+            .replace(/\./g, " ")
+            .replace(/\[[^\]]*\]/g, " ")
+            .replace(/\([^\)]*\)/g, " ")
+            .replace(/\d{4}.*$/i, "")
+            .replace(/\s+/g, " ")
             .trim();
 
-        // Tentar buscar poster via TMDB mesmo no fallback
         let posterUrl = null;
         try {
             const tmdbResults = await TMDBService.search(cleanTitle);
             if (tmdbResults.length > 0) {
                 posterUrl = tmdbResults[0].backdrop_path || tmdbResults[0].poster_path;
             }
-        } catch (e) { }
+        } catch {
+            // noop
+        }
 
         return {
             title: cleanTitle || title,
-            description: rawDescription || `Conteúdo processado automaticamente.`,
+            description: rawDescription || "Conteudo processado automaticamente.",
             category: "Geral",
             tags: ["NEXUS", "Auto"],
             poster: posterUrl

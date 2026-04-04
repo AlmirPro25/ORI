@@ -67,15 +67,37 @@ class NexusAdvancedSearch {
             // Buscar em todos os providers ativos
             const results = await this.api.search(query, category, limit);
 
-            logger.info(`📦 Encontrados ${results.length} resultados brutos`);
+            logger.info(`ðŸ“¦ Encontrados ${results.length} resultados brutos`);
 
             // Processar e enriquecer resultados
             const processed = await this.processResults(results);
 
             // Ordenar por seeds (mais seeders primeiro)
             const sorted = processed.sort((a, b) => b.seeds - a.seeds);
+            const providerCounts = {};
+            sorted.forEach((item) => {
+                const provider = item.provider || 'Unknown';
+                providerCounts[provider] = (providerCounts[provider] || 0) + 1;
+            });
+            const diagnostics = this.api.getActiveProviders().map((provider) => {
+                const providerName = typeof provider === 'string'
+                    ? provider
+                    : (provider?.name || provider?.publicName || provider?.constructor?.name || 'Unknown');
+                return {
+                provider: providerName,
+                status: providerCounts[providerName] > 0 ? 'ok' : 'empty',
+                count: providerCounts[providerName] || 0,
+                error: providerCounts[providerName] > 0 ? null : 'Vazio neste provider.'
+                };
+            });
 
-            logger.info(`✅ Retornando ${sorted.length} resultados processados`);
+            logger.info(`âœ… Retornando ${sorted.length} resultados processados`);
+            logger.info(`[AdvancedSearch] Providers: ${diagnostics.map(d => `${d.provider}:${d.status}${d.count ? `(${d.count})` : ''}`).join(' | ')}`);
+            Object.defineProperty(sorted, '_diagnostics', {
+                value: diagnostics,
+                enumerable: false,
+                configurable: true,
+            });
             return sorted;
 
         } catch (error) {

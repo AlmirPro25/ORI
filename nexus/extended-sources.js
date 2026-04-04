@@ -1,15 +1,15 @@
-/**
+﻿/**
  * NEXUS EXTENDED SOURCES V2
  * ========================
- * Implementação REAL de 8+ fontes de torrent
+ * ImplementaÃ§Ã£o REAL de 8+ fontes de torrent
  * Cada fonte tem scraping/API funcional com fallback
  * 
  * FONTES ATIVAS:
  * 1. YTS (API oficial - Filmes em alta qualidade)
- * 2. EZTV (Scraping - Séries/TV) 
+ * 2. EZTV (Scraping - SÃ©ries/TV) 
  * 3. Nyaa.si (Scraping - Anime)
  * 4. BitSearch (Scraping - Geral)
- * 5. LimeTorrents (Scraping - Geral, enorme catálogo)
+ * 5. LimeTorrents (Scraping - Geral, enorme catÃ¡logo)
  * 6. TorrentDownloads (Scraping - Geral)
  * 7. SolidTorrents (API - Geral, alta qualidade)
  * 8. GloTorrents (Scraping - Geral, bom para PT-BR)
@@ -35,12 +35,23 @@ const USER_AGENTS = [
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 ];
+function classifySourceFailure(message = '') {
+    const normalized = String(message || '').toLowerCase();
+    if (!normalized || normalized.includes('vazio')) return 'empty';
+    if (normalized.includes('err_name_not_resolved') || normalized.includes('dns')) return 'dns';
+    if (normalized.includes('timeout')) return 'timeout';
+    if (normalized.includes('429')) return 'rate_limit';
+    if (normalized.includes('403') || normalized.includes('401')) return 'auth';
+    if (normalized.includes('500') || normalized.includes('502') || normalized.includes('503') || normalized.includes('504')) return 'http';
+    return 'error';
+}
+
 
 class ExtendedSources {
     constructor() {
         this.timeout = 15000;
         this.sources = this.initializeSources();
-        logger.info(`🌐 [ExtendedSources V2] Inicializado com ${Object.keys(this.sources).length} fontes`);
+        logger.info(`ðŸŒ [ExtendedSources V2] Inicializado com ${Object.keys(this.sources).length} fontes`);
     }
 
     getRandomUA() {
@@ -70,10 +81,10 @@ class ExtendedSources {
         };
     }
 
-    // === YTS (Múltiplos mirrors) ===
+    // === YTS (MÃºltiplos mirrors) ===
     async searchYTS(query, limit = 10) {
         try {
-            logger.info(`🎬 [YTS] Buscando: "${query}"`);
+            logger.info(`ðŸŽ¬ [YTS] Buscando: "${query}"`);
             const mirrors = [
                 'https://yts.mx/api/v2/list_movies.json',
                 'https://yts.rs/api/v2/list_movies.json',
@@ -110,10 +121,10 @@ class ExtendedSources {
                     });
                 }
             }
-            logger.info(`✅ [YTS] ${results.length} resultados`);
+            logger.info(`âœ… [YTS] ${results.length} resultados`);
             return results;
         } catch (error) {
-            logger.warn(`⚠️ [YTS] Falhou: ${error.message}`);
+            logger.warn(`âš ï¸ [YTS] Falhou: ${error.message}`);
             return [];
         }
     }
@@ -121,7 +132,7 @@ class ExtendedSources {
     // === EZTV (Scraping) ===
     async searchEZTV(query, limit = 15) {
         try {
-            logger.info(`📺 [EZTV] Buscando: "${query}"`);
+            logger.info(`ðŸ“º [EZTV] Buscando: "${query}"`);
             const searchUrl = `https://eztv.re/search/${encodeURIComponent(query)}`;
             const response = await axios.get(searchUrl, {
                 timeout: this.timeout,
@@ -139,10 +150,10 @@ class ExtendedSources {
                     results.push({ title, magnetLink, size, seeds, peers: 0, provider: 'EZTV', sourceSite: 'EZTV' });
                 }
             });
-            logger.info(`✅ [EZTV] ${results.length} resultados`);
+            logger.info(`âœ… [EZTV] ${results.length} resultados`);
             return results;
         } catch (error) {
-            logger.warn(`⚠️ [EZTV] Falhou: ${error.message}`);
+            logger.warn(`âš ï¸ [EZTV] Falhou: ${error.message}`);
             return [];
         }
     }
@@ -150,7 +161,7 @@ class ExtendedSources {
     // === Nyaa.si (Scraping - Anime) ===
     async searchNyaa(query, limit = 10) {
         try {
-            logger.info(`🎌 [Nyaa] Buscando: "${query}"`);
+            logger.info(`ðŸŽŒ [Nyaa] Buscando: "${query}"`);
             const response = await axios.get('https://nyaa.si', {
                 params: { f: 0, c: '0_0', q: query, s: 'seeders', o: 'desc' },
                 timeout: this.timeout,
@@ -169,10 +180,10 @@ class ExtendedSources {
                     results.push({ title, magnetLink, size, seeds, peers, provider: 'Nyaa.si', sourceSite: 'Nyaa.si' });
                 }
             });
-            logger.info(`✅ [Nyaa] ${results.length} resultados`);
+            logger.info(`âœ… [Nyaa] ${results.length} resultados`);
             return results;
         } catch (error) {
-            logger.warn(`⚠️ [Nyaa] Falhou: ${error.message}`);
+            logger.warn(`âš ï¸ [Nyaa] Falhou: ${error.message}`);
             return [];
         }
     }
@@ -180,7 +191,7 @@ class ExtendedSources {
     // === BitSearch (Scraping com mirrors) ===
     async searchBitSearch(query, limit = 15) {
         try {
-            logger.info(`🔍 [BitSearch] Buscando: "${query}"`);
+            logger.info(`ðŸ” [BitSearch] Buscando: "${query}"`);
             const urls = ['https://bitsearch.to/search', 'https://bitsearch.info/search'];
             let response = null;
             for (const url of urls) {
@@ -214,18 +225,18 @@ class ExtendedSources {
                     results.push({ title, magnetLink, size, seeds, peers: 0, provider: 'BitSearch', sourceSite: 'BitSearch' });
                 }
             });
-            logger.info(`✅ [BitSearch] ${results.length} resultados`);
+            logger.info(`âœ… [BitSearch] ${results.length} resultados`);
             return results;
         } catch (error) {
-            logger.warn(`⚠️ [BitSearch] Falhou: ${error.message}`);
+            logger.warn(`âš ï¸ [BitSearch] Falhou: ${error.message}`);
             return [];
         }
     }
 
-    // === LimeTorrents (Scraping - Enorme catálogo) ===
+    // === LimeTorrents (Scraping - Enorme catÃ¡logo) ===
     async searchLimeTorrents(query, limit = 15) {
         try {
-            logger.info(`🍋 [LimeTorrents] Buscando: "${query}"`);
+            logger.info(`ðŸ‹ [LimeTorrents] Buscando: "${query}"`);
             const urls = [
                 `https://www.limetorrents.lol/search/all/${encodeURIComponent(query)}/seeds/1/`,
                 `https://www.limetorrents.pro/search/all/${encodeURIComponent(query)}/seeds/1/`,
@@ -258,10 +269,10 @@ class ExtendedSources {
                     });
                 }
             });
-            logger.info(`✅ [LimeTorrents] ${results.length} resultados`);
+            logger.info(`âœ… [LimeTorrents] ${results.length} resultados`);
             return results;
         } catch (error) {
-            logger.warn(`⚠️ [LimeTorrents] Falhou: ${error.message}`);
+            logger.warn(`âš ï¸ [LimeTorrents] Falhou: ${error.message}`);
             return [];
         }
     }
@@ -269,7 +280,7 @@ class ExtendedSources {
     // === TorrentDownloads (Scraping) ===
     async searchTorrentDownloads(query, limit = 15) {
         try {
-            logger.info(`📥 [TorrentDownloads] Buscando: "${query}"`);
+            logger.info(`ðŸ“¥ [TorrentDownloads] Buscando: "${query}"`);
             const response = await axios.get('https://www.torrentdownloads.pro/search', {
                 params: { search: query },
                 timeout: this.timeout,
@@ -294,10 +305,10 @@ class ExtendedSources {
                     });
                 }
             });
-            logger.info(`✅ [TorrentDownloads] ${results.length} resultados`);
+            logger.info(`âœ… [TorrentDownloads] ${results.length} resultados`);
             return results;
         } catch (error) {
-            logger.warn(`⚠️ [TorrentDownloads] Falhou: ${error.message}`);
+            logger.warn(`âš ï¸ [TorrentDownloads] Falhou: ${error.message}`);
             return [];
         }
     }
@@ -305,7 +316,7 @@ class ExtendedSources {
     // === SolidTorrents (API JSON) ===
     async searchSolidTorrents(query, limit = 15) {
         try {
-            logger.info(`💎 [SolidTorrents] Buscando: "${query}"`);
+            logger.info(`ðŸ’Ž [SolidTorrents] Buscando: "${query}"`);
             const response = await axios.get('https://solidtorrents.to/api/v1/search', {
                 params: { q: query, sort: 'seeders', category: 'all', fuv: 'yes' },
                 timeout: this.timeout,
@@ -321,10 +332,10 @@ class ExtendedSources {
                 provider: 'SolidTorrents',
                 sourceSite: 'SolidTorrents'
             })).filter(r => r.magnetLink);
-            logger.info(`✅ [SolidTorrents] ${results.length} resultados`);
+            logger.info(`âœ… [SolidTorrents] ${results.length} resultados`);
             return results;
         } catch (error) {
-            logger.warn(`⚠️ [SolidTorrents] Falhou: ${error.message}`);
+            logger.warn(`âš ï¸ [SolidTorrents] Falhou: ${error.message}`);
             return [];
         }
     }
@@ -332,7 +343,7 @@ class ExtendedSources {
     // === GloTorrents (Scraping) ===
     async searchGloTorrents(query, limit = 15) {
         try {
-            logger.info(`🌍 [GloTorrents] Buscando: "${query}"`);
+            logger.info(`ðŸŒ [GloTorrents] Buscando: "${query}"`);
             const response = await axios.get('https://glodls.to/search_results.php', {
                 params: { search: query, cat: 0, incldead: 0, inclexternal: 0, lang: 0, sort: 'seeders', order: 'desc' },
                 timeout: this.timeout,
@@ -351,38 +362,57 @@ class ExtendedSources {
                     results.push({ title, magnetLink, size, seeds, peers, provider: 'GloTorrents', sourceSite: 'GloTorrents' });
                 }
             });
-            logger.info(`✅ [GloTorrents] ${results.length} resultados`);
+            logger.info(`Ã¢Å“â€¦ [GloTorrents] ${results.length} resultados`);
             return results;
         } catch (error) {
-            logger.warn(`⚠️ [GloTorrents] Falhou: ${error.message}`);
+            logger.warn(`Ã¢Å¡Â Ã¯Â¸Â [GloTorrents] Falhou: ${error.message}`);
             return [];
         }
     }
 
     // === BUSCA EM TODAS AS FONTES (Paralelo com Promise.allSettled) ===
     async searchAll(query, category = 'All', limit = 8) {
-        logger.info(`⚡ [ExtendedSources] Busca completa: "${query}" | Cat: ${category} | Limit: ${limit}/fonte`);
+        logger.info(`Ã¢Å¡Â¡ [ExtendedSources] Busca completa: "${query}" | Cat: ${category} | Limit: ${limit}/fonte`);
 
         const searches = [
-            this.searchBitSearch(query, limit),
-            this.searchSolidTorrents(query, limit),
-            this.searchLimeTorrents(query, limit),
-            this.searchGloTorrents(query, limit),
-            this.searchTorrentDownloads(query, limit)
+            { provider: 'BitSearch', run: () => this.searchBitSearch(query, limit) },
+            { provider: 'SolidTorrents', run: () => this.searchSolidTorrents(query, limit) },
+            { provider: 'LimeTorrents', run: () => this.searchLimeTorrents(query, limit) },
+            { provider: 'GloTorrents', run: () => this.searchGloTorrents(query, limit) },
+            { provider: 'TorrentDownloads', run: () => this.searchTorrentDownloads(query, limit) }
         ];
 
         if (category === 'Movies' || category === 'All') {
-            searches.push(this.searchYTS(query, limit));
+            searches.push({ provider: 'YTS', run: () => this.searchYTS(query, limit) });
         }
         if (category === 'TV' || category === 'All') {
-            searches.push(this.searchEZTV(query, limit));
+            searches.push({ provider: 'EZTV', run: () => this.searchEZTV(query, limit) });
         }
         if (category === 'Anime' || category === 'All') {
-            searches.push(this.searchNyaa(query, limit));
+            searches.push({ provider: 'Nyaa.si', run: () => this.searchNyaa(query, limit) });
         }
 
         try {
-            const results = await Promise.allSettled(searches);
+            const results = await Promise.allSettled(searches.map(entry => entry.run()));
+            const diagnostics = results.map((result, index) => {
+                const provider = searches[index].provider;
+                if (result.status === 'fulfilled') {
+                    const count = Array.isArray(result.value) ? result.value.length : 0;
+                    return {
+                        provider,
+                        status: count > 0 ? 'ok' : 'empty',
+                        count,
+                        error: count > 0 ? null : 'Vazio nesta fonte.'
+                    };
+                }
+
+                return {
+                    provider,
+                    status: classifySourceFailure(result.reason?.message || ''),
+                    count: 0,
+                    error: result.reason?.message || String(result.reason || 'Falha desconhecida')
+                };
+            });
             const combined = results
                 .filter(r => r.status === 'fulfilled')
                 .flatMap(r => r.value || []);
@@ -395,16 +425,22 @@ class ExtendedSources {
                 sourceStats[r.provider] = (sourceStats[r.provider] || 0) + 1;
             });
 
-            logger.info(`✅ [ExtendedSources] TOTAL: ${sorted.length} resultados únicos de ${Object.keys(sourceStats).length} fontes`);
-            logger.info(`📊 [ExtendedSources] Breakdown: ${JSON.stringify(sourceStats)}`);
+            logger.info(`Ã¢Å“â€¦ [ExtendedSources] TOTAL: ${sorted.length} resultados ÃƒÂºnicos de ${Object.keys(sourceStats).length} fontes`);
+            logger.info(`Ã°Å¸â€œÅ  [ExtendedSources] Breakdown: ${JSON.stringify(sourceStats)}`);
+            logger.info(`[ExtendedSources] Diagnostics: ${diagnostics.map(d => `${d.provider}:${d.status}${d.count ? `(${d.count})` : ''}`).join(' | ')}`);
+            Object.defineProperty(sorted, '_diagnostics', {
+                value: diagnostics,
+                enumerable: false,
+                configurable: true,
+            });
             return sorted;
         } catch (error) {
-            logger.error(`❌ [ExtendedSources] Erro crítico: ${error.message}`);
+            logger.error(`Ã¢ÂÅ’ [ExtendedSources] Erro crÃƒÂ­tico: ${error.message}`);
             return [];
         }
     }
 
-    // === Utilitários ===
+    // === UtilitÃ¡rios ===
     removeDuplicates(results) {
         const seen = new Set();
         return results.filter(r => {

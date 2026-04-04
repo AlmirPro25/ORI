@@ -247,7 +247,10 @@ async function executeWebTorrent(download: any) {
                 const downloadSpeed = torrent.downloadSpeed / 1024;
                 const uploadSpeed = torrent.uploadSpeed / 1024;
                 const remaining = torrent.length * (1 - torrent.progress);
-                const eta = downloadSpeed > 0 ? Math.round(remaining / downloadSpeed / 1024) : 0;
+                const rawEta = downloadSpeed > 0 ? Math.round(remaining / downloadSpeed / 1024) : 0;
+                const eta = Number.isFinite(rawEta)
+                    ? Math.max(0, Math.min(rawEta, 2147483647))
+                    : 0;
 
                 // Throttling de DB updates
                 const lastUpdate = lastUpdateCache.get(videoId);

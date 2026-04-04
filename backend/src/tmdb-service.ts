@@ -23,6 +23,71 @@ export interface TMDBMedia {
 }
 
 export class TMDBService {
+    private static mapMovie(item: any): TMDBMedia {
+        return {
+            id: item.id,
+            title: item.title,
+            original_title: item.original_title,
+            overview: item.overview,
+            poster_path: item.poster_path ? `${IMAGE_BASE_URL}${item.poster_path}` : null,
+            backdrop_path: item.backdrop_path ? `${IMAGE_BASE_URL}${item.backdrop_path}` : null,
+            release_date: item.release_date,
+            media_type: 'movie',
+            vote_average: item.vote_average
+        };
+    }
+
+    private static mapSeries(item: any): TMDBMedia {
+        return {
+            id: item.id,
+            title: item.name,
+            original_title: item.original_name,
+            overview: item.overview,
+            poster_path: item.poster_path ? `${IMAGE_BASE_URL}${item.poster_path}` : null,
+            backdrop_path: item.backdrop_path ? `${IMAGE_BASE_URL}${item.backdrop_path}` : null,
+            release_date: item.first_air_date,
+            first_air_date: item.first_air_date,
+            media_type: 'tv' as const,
+            vote_average: item.vote_average
+        };
+    }
+
+    private static async fetchMovieCollection(endpoint: string): Promise<TMDBMedia[]> {
+        if (!TMDB_API_KEY) return [];
+
+        try {
+            const response = await axios.get(`${TMDB_BASE_URL}${endpoint}`, {
+                params: {
+                    api_key: TMDB_API_KEY,
+                    language: 'pt-BR'
+                }
+            });
+
+            return (response.data.results || []).map((item: any) => TMDBService.mapMovie(item));
+        } catch (error: any) {
+            console.error(`❌ [TMDB] Erro ao buscar coleção de filmes (${endpoint}):`, error.message);
+            return [];
+        }
+    }
+
+    private static async fetchSeriesCollection(endpoint: string): Promise<TMDBMedia[]> {
+        if (!TMDB_API_KEY) return [];
+
+        try {
+            const response = await axios.get(`${TMDB_BASE_URL}${endpoint}`, {
+                params: {
+                    api_key: TMDB_API_KEY,
+                    language: 'pt-BR'
+                }
+            });
+
+            return (response.data.results || []).map((item: any) => TMDBService.mapSeries(item));
+        } catch (error: any) {
+            console.error(`❌ [TMDB] Erro ao buscar coleção de séries (${endpoint}):`, error.message);
+            return [];
+        }
+    }
+
     static async search(query: string): Promise<TMDBMedia[]> {
         if (!TMDB_API_KEY) {
             console.warn('⚠️ [TMDB] API Key não configurada.');
@@ -101,21 +166,26 @@ export class TMDBService {
                 }
             });
 
-            return response.data.results.map((item: any) => ({
-                id: item.id,
-                title: item.title,
-                original_title: item.original_title,
-                overview: item.overview,
-                poster_path: item.poster_path ? `${IMAGE_BASE_URL}${item.poster_path}` : null,
-                backdrop_path: item.backdrop_path ? `${IMAGE_BASE_URL}${item.backdrop_path}` : null,
-                release_date: item.release_date,
-                media_type: 'movie',
-                vote_average: item.vote_average
-            }));
+            return response.data.results.map((item: any) => TMDBService.mapMovie(item));
         } catch (error: any) {
             console.error('❌ [TMDB] Erro ao buscar tendências:', error.message);
             return [];
         }
+    }
+
+    static async getPopularMovies(): Promise<TMDBMedia[]> {
+        console.log('[TMDB] Buscando filmes populares...');
+        return TMDBService.fetchMovieCollection('/movie/popular');
+    }
+
+    static async getUpcomingMovies(): Promise<TMDBMedia[]> {
+        console.log('[TMDB] Buscando próximos lançamentos...');
+        return TMDBService.fetchMovieCollection('/movie/upcoming');
+    }
+
+    static async getTopRatedMovies(): Promise<TMDBMedia[]> {
+        console.log('[TMDB] Buscando filmes mais bem avaliados...');
+        return TMDBService.fetchMovieCollection('/movie/top_rated');
     }
 
     /**
@@ -133,21 +203,21 @@ export class TMDBService {
                 }
             });
 
-            return response.data.results.map((item: any) => ({
-                id: item.id,
-                title: item.name,
-                original_title: item.original_name,
-                overview: item.overview,
-                poster_path: item.poster_path ? `${IMAGE_BASE_URL}${item.poster_path}` : null,
-                backdrop_path: item.backdrop_path ? `${IMAGE_BASE_URL}${item.backdrop_path}` : null,
-                release_date: item.first_air_date,
-                media_type: 'tv' as const,
-                vote_average: item.vote_average
-            }));
+            return response.data.results.map((item: any) => TMDBService.mapSeries(item));
         } catch (error: any) {
             console.error('❌ [TMDB] Erro ao buscar séries em alta:', error.message);
             return [];
         }
+    }
+
+    static async getPopularSeries(): Promise<TMDBMedia[]> {
+        console.log('[TMDB] Buscando séries populares...');
+        return TMDBService.fetchSeriesCollection('/tv/popular');
+    }
+
+    static async getTopRatedSeries(): Promise<TMDBMedia[]> {
+        console.log('[TMDB] Buscando séries mais bem avaliadas...');
+        return TMDBService.fetchSeriesCollection('/tv/top_rated');
     }
 
     /**

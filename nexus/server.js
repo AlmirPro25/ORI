@@ -1,8 +1,8 @@
-/**
+﻿/**
  * ARCONTE DO NEXO PROFUNDO - CORE SERVER
  * --------------------------------------
  * Stack: Node.js, Express, Puppeteer, SQLite3, Winston, Helmet, RateLimit
- * Responsabilidade: Orquestração de busca, evasão anti-bot, persistência e API.
+ * Responsabilidade: OrquestraÃ§Ã£o de busca, evasÃ£o anti-bot, persistÃªncia e API.
  */
 
 const express = require('express');
@@ -20,7 +20,7 @@ const ExtendedSources = require('./extended-sources');
 const PTBRPriority = require('./ptbr-priority');
 const SemanticSearch = require('./semantic-search');
 
-// --- CONFIGURAÇÃO DO SISTEMA ---
+// --- CONFIGURAÃ‡ÃƒO DO SISTEMA ---
 const PORT = process.env.PORT || 3005;
 const DB_FILE = path.join(__dirname, 'nexus.db');
 const CACHE_TTL_HOURS = 24;
@@ -50,7 +50,7 @@ const logger = winston.createLogger({
 
 // --- MIDDLEWARES ---
 app.use(helmet({
-    contentSecurityPolicy: false, // Necessário para carregar scripts externos no index.html de dev
+    contentSecurityPolicy: false, // NecessÃ¡rio para carregar scripts externos no index.html de dev
 }));
 app.use(cors());
 app.use(express.json());
@@ -96,8 +96,19 @@ db.serialize(() => {
 
 // --- MOTOR DE BUSCA (PUPPETEER ENGINE) ---
 // --- MOTOR DE BUSCA MULTI-FONTE (NEXUS ENGINE 2026) ---
+function classifyProviderFailure(message = '') {
+    const normalized = String(message || '').toLowerCase();
+    if (!normalized || normalized.includes('vazio')) return 'empty';
+    if (normalized.includes('err_name_not_resolved') || normalized.includes('dns')) return 'dns';
+    if (normalized.includes('timeout')) return 'timeout';
+    if (normalized.includes('429')) return 'rate_limit';
+    if (normalized.includes('403') || normalized.includes('401')) return 'auth';
+    if (normalized.includes('500') || normalized.includes('502') || normalized.includes('503') || normalized.includes('504')) return 'http';
+    return 'error';
+}
+
 async function performDeepScraping(term) {
-    logger.info(`[ENGINE] 📡 Iniciando varredura multi-source (1337x, TPB, YTS) para: "${term}"`);
+    logger.info(`[ENGINE] ðŸ“¡ Iniciando varredura multi-source (1337x, TPB, YTS) para: "${term}"`);
     let browser = null;
     try {
         browser = await puppeteer.launch({
@@ -162,15 +173,15 @@ async function performDeepScraping(term) {
             } catch (e) {
                 await page.close();
                 logger.warn(`[1337x] Offline ou Bloqueado: ${e.message}`);
-                return [];
+                throw e;
             }
         };
 
-        // --- SUB-SCRAPER 2: The Pirate Bay (TPB - Resiliência) ---
+        // --- SUB-SCRAPER 2: The Pirate Bay (TPB - ResiliÃªncia) ---
         const scrapeTPB = async () => {
             const page = await createAgentPage();
             try {
-                // TPB utiliza magnet direto na lista, muito mais rápido
+                // TPB utiliza magnet direto na lista, muito mais rÃ¡pido
                 const searchUrl = `https://thepiratebay.org/search.php?q=${encodeURIComponent(term)}&all=on&search=Pirate+Search&page=0&orderby=99`;
                 await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
 
@@ -189,7 +200,7 @@ async function performDeepScraping(term) {
             } catch (e) {
                 await page.close();
                 logger.warn(`[TPB] Falha: ${e.message}`);
-                return [];
+                throw e;
             }
         };
 
@@ -242,11 +253,11 @@ async function performDeepScraping(term) {
             } catch (e) {
                 await page.close();
                 logger.warn(`[YTS] Falha: ${e.message}`);
-                return [];
+                throw e;
             }
         };
 
-        // --- SUB-SCRAPER 4: LimeTorrents (Catálogo enorme) ---
+        // --- SUB-SCRAPER 4: LimeTorrents (CatÃ¡logo enorme) ---
         const scrapeLimeTorrents = async () => {
             const page = await createAgentPage();
             try {
@@ -290,7 +301,7 @@ async function performDeepScraping(term) {
             } catch (e) {
                 await page.close();
                 logger.warn(`[LimeTorrents] Falha: ${e.message}`);
-                return [];
+                throw e;
             }
         };
 
@@ -319,19 +330,39 @@ async function performDeepScraping(term) {
             } catch (e) {
                 await page.close();
                 logger.warn(`[TorrentGalaxy] Falha: ${e.message}`);
-                return [];
+                throw e;
             }
         };
 
-        // --- EXECUÇÃO PARALELA DE 5 FONTES ---
-        logger.info(`[ENGINE] 🚀 Disparando 5 scrapers em paralelo para: "${term}"`);
-        const allResults = await Promise.allSettled([
-            scrape1337x(),
-            scrapeTPB(),
-            scrapeYTS(),
-            scrapeLimeTorrents(),
-            scrapeTorrentGalaxy()
-        ]);
+        // --- EXECUÃ‡ÃƒO PARALELA DE 5 FONTES ---
+        logger.info(`[ENGINE] ðŸš€ Disparando 5 scrapers em paralelo para: "${term}"`);
+        const scraperEntries = [
+            { provider: '1337x', run: scrape1337x },
+            { provider: 'ThePirateBay', run: scrapeTPB },
+            { provider: 'YTS', run: scrapeYTS },
+            { provider: 'LimeTorrents', run: scrapeLimeTorrents },
+            { provider: 'TorrentGalaxy', run: scrapeTorrentGalaxy }
+        ];
+        const allResults = await Promise.allSettled(scraperEntries.map(entry => entry.run()));
+        const diagnostics = allResults.map((result, index) => {
+            const provider = scraperEntries[index].provider;
+            if (result.status === 'fulfilled') {
+                const count = Array.isArray(result.value) ? result.value.length : 0;
+                return {
+                    provider,
+                    status: count > 0 ? 'ok' : 'empty',
+                    count,
+                    error: count > 0 ? null : 'Vazio nesta fonte.'
+                };
+            }
+
+            return {
+                provider,
+                status: classifyProviderFailure(result.reason?.message || ''),
+                count: 0,
+                error: result.reason?.message || String(result.reason || 'Falha desconhecida')
+            };
+        });
 
         const combined = allResults
             .filter(r => r.status === 'fulfilled')
@@ -339,16 +370,44 @@ async function performDeepScraping(term) {
             .sort((a, b) => (b.seeds || 0) - (a.seeds || 0));
 
         const successCount = allResults.filter(r => r.status === 'fulfilled' && r.value?.length > 0).length;
-        logger.info(`[ENGINE] ✅ ${combined.length} resultados de ${successCount}/5 scrapers ativos`);
+        logger.info(`[ENGINE] Ã¢Å“â€¦ ${combined.length} resultados de ${successCount}/5 scrapers ativos`);
+        logger.info(`[ENGINE] Providers: ${diagnostics.map(d => `${d.provider}:${d.status}${d.count ? `(${d.count})` : ''}`).join(' | ')}`);
 
-        if (combined.length === 0) throw new Error("Vazio em todas as fontes.");
+        Object.defineProperty(combined, '_diagnostics', {
+            value: diagnostics,
+            enumerable: false,
+            configurable: true,
+        });
+
+        if (combined.length === 0) {
+            const emptyError = new Error("Vazio em todas as fontes.");
+            emptyError.failures = diagnostics;
+            throw emptyError;
+        }
 
         return combined;
 
     } catch (error) {
-        logger.error(`[ENGINE] Erro crítico multi-source para "${term}": ${error.message}`);
+        const failures = Array.isArray(error?.failures) ? error.failures : [];
+        logger.error(`[ENGINE] Erro crÃƒÂ­tico multi-source para "${term}": ${error.message}${failures.length ? ` | failures=${JSON.stringify(failures)}` : ''}`);
 
-        return [];
+        const fallbackDiagnostics = failures.length > 0
+            ? failures
+            : [{
+                provider: 'engine',
+                status: classifyProviderFailure(error?.message || ''),
+                count: 0,
+                error: error?.message || 'Falha desconhecida no deepScraping.'
+            }];
+
+        const emptyResults = [];
+        Object.defineProperty(emptyResults, '_diagnostics', {
+            value: fallbackDiagnostics,
+            enumerable: false,
+            configurable: true,
+        });
+
+        return emptyResults;
     } finally {
         if (browser) await browser.close();
     }
@@ -358,7 +417,7 @@ async function performDeepScraping(term) {
 const searchRateLimiter = rateLimit({
     windowMs: 1 * 60 * 1000,
     max: 30,
-    message: { error: 'LIMITE DE REQUISIÇÕES ATINGIDO. AGUARDE O RESET DO NEXO.' }
+    message: { error: 'LIMITE DE REQUISIÃ‡Ã•ES ATINGIDO. AGUARDE O RESET DO NEXO.' }
 });
 
 app.get('/api/health', (req, res) => {
@@ -371,23 +430,23 @@ app.post('/api/search', searchRateLimiter, async (req, res) => {
 
     const normalizedTerm = query.toLowerCase().trim();
 
-    logger.info(`[SEARCH] 🔍 Busca: "${normalizedTerm}" | PT-BR Priority: ${prioritizePTBR} | PT-BR Only: ${ptbrOnly}`);
+    logger.info(`[SEARCH] ðŸ” Busca: "${normalizedTerm}" | PT-BR Priority: ${prioritizePTBR} | PT-BR Only: ${ptbrOnly}`);
 
     db.get(`SELECT id, createdAt FROM SearchQuery WHERE term = ? ORDER BY createdAt DESC LIMIT 1`, [normalizedTerm], async (err, row) => {
         const cacheValid = row && ((Date.now() - new Date(row.createdAt).getTime()) / 36e5) < CACHE_TTL_HOURS;
 
-        // Só usamos o cache se houver resultados reais salvos
+        // SÃ³ usamos o cache se houver resultados reais salvos
         if (cacheValid && !forceRefresh) {
             db.all(`SELECT * FROM SearchResult WHERE queryId = ? ORDER BY seeds DESC`, [row.id], (err, results) => {
                 if (results && results.length > 0) {
-                    // Aplicar priorização PT-BR mesmo no cache
+                    // Aplicar priorizaÃ§Ã£o PT-BR mesmo no cache
                     let finalResults = prioritizePTBR ? PTBRPriority.prioritizePTBRResults(results) : results;
                     if (ptbrOnly) {
                         finalResults = PTBRPriority.filterPTBROnly(finalResults);
                     }
                     return res.json({ source: 'cache', prioritized: prioritizePTBR, results: finalResults });
                 }
-                // Se o cache está vazio, forçamos uma nova busca viva
+                // Se o cache estÃ¡ vazio, forÃ§amos uma nova busca viva
                 performLiveSearch();
             });
         } else {
@@ -404,15 +463,15 @@ app.post('/api/search', searchRateLimiter, async (req, res) => {
                     return res.json({ source: 'live_network', results: [] });
                 }
 
-                // Aplicar priorização PT-BR aos resultados frescos
+                // Aplicar priorizaÃ§Ã£o PT-BR aos resultados frescos
                 let finalResults = prioritizePTBR ? PTBRPriority.prioritizePTBRResults(freshResults) : freshResults;
                 if (ptbrOnly) {
                     finalResults = PTBRPriority.filterPTBROnly(finalResults);
                 }
 
-                // Logar estatísticas de PT-BR
+                // Logar estatÃ­sticas de PT-BR
                 const ptbrCount = finalResults.filter(r => r.hasPTBRAudio || r.hasPTBRSubs).length;
-                logger.info(`[SEARCH] 🇧🇷 ${ptbrCount}/${finalResults.length} resultados com conteúdo PT-BR detectado`);
+                logger.info(`[SEARCH] ðŸ‡§ðŸ‡· ${ptbrCount}/${finalResults.length} resultados com conteÃºdo PT-BR detectado`);
 
                 const queryId = crypto.randomUUID();
 
@@ -430,41 +489,41 @@ app.post('/api/search', searchRateLimiter, async (req, res) => {
                     results: finalResults
                 });
             } catch (scrapeError) {
-                logger.error(`[API] Falha na extração viva: ${scrapeError.message}`);
-                res.status(500).json({ error: "Erro na extração profunda.", details: scrapeError.message });
+                logger.error(`[API] Falha na extraÃ§Ã£o viva: ${scrapeError.message}`);
+                res.status(500).json({ error: "Erro na extraÃ§Ã£o profunda.", details: scrapeError.message });
             }
         }
     });
 });
 
-// --- BUSCA AVANÇADA (MULTI-PROVIDER API) ---
+// --- BUSCA AVANÃ‡ADA (MULTI-PROVIDER API) ---
 let advancedSearch = null;
 let extendedSources = null;
 
-// Inicializar motor avançado
+// Inicializar motor avanÃ§ado
 try {
     advancedSearch = new NexusAdvancedSearch();
-    logger.info('✅ Motor de Busca Avançado inicializado');
+    logger.info('âœ… Motor de Busca AvanÃ§ado inicializado');
 } catch (e) {
-    logger.warn('⚠️  Motor Avançado não disponível, usando apenas Puppeteer');
+    logger.warn('âš ï¸  Motor AvanÃ§ado nÃ£o disponÃ­vel, usando apenas Puppeteer');
 }
 
 // Inicializar fontes estendidas
 try {
     extendedSources = new ExtendedSources();
-    logger.info('✅ Fontes Estendidas inicializadas (YTS, EZTV, Nyaa, BitSearch)');
+    logger.info('âœ… Fontes Estendidas inicializadas (YTS, EZTV, Nyaa, BitSearch)');
 } catch (e) {
-    logger.warn('⚠️  Fontes Estendidas não disponíveis');
+    logger.warn('âš ï¸  Fontes Estendidas nÃ£o disponÃ­veis');
 }
 
 app.post('/api/search/advanced', searchRateLimiter, async (req, res) => {
     const { query, category = 'Movies', limit = 5, mode = 'auto' } = req.body;
 
     if (!query || query.trim().length < 3) {
-        return res.status(400).json({ error: "Termo de busca insuficiente (mín. 3 caracteres)" });
+        return res.status(400).json({ error: "Termo de busca insuficiente (mÃ­n. 3 caracteres)" });
     }
 
-    logger.info(`[ADVANCED] 🔍 Busca: "${query}" | Modo: ${mode}`);
+    logger.info(`[ADVANCED] ðŸ” Busca: "${query}" | Modo: ${mode}`);
 
     try {
         let results = [];
@@ -476,7 +535,7 @@ app.post('/api/search/advanced', searchRateLimiter, async (req, res) => {
                 results = await advancedSearch.search(query, category, limit);
 
                 if (results.length > 0) {
-                    logger.info(`[ADVANCED] ✅ API retornou ${results.length} resultados`);
+                    logger.info(`[ADVANCED] âœ… API retornou ${results.length} resultados`);
 
                     // Salvar no cache
                     const queryId = crypto.randomUUID();
@@ -523,7 +582,7 @@ app.post('/api/search/advanced', searchRateLimiter, async (req, res) => {
         }
 
         // Nenhum resultado encontrado
-        logger.warn(`[ADVANCED] ⚠️  Nenhum resultado para: "${query}"`);
+        logger.warn(`[ADVANCED] âš ï¸  Nenhum resultado para: "${query}"`);
         res.json({
             source: 'no_results',
             message: 'Nenhum resultado encontrado',
@@ -531,20 +590,20 @@ app.post('/api/search/advanced', searchRateLimiter, async (req, res) => {
         });
 
     } catch (error) {
-        logger.error(`[ADVANCED] ❌ Erro: ${error.message}`);
+        logger.error(`[ADVANCED] âŒ Erro: ${error.message}`);
         res.status(500).json({
-            error: "Erro na busca avançada",
+            error: "Erro na busca avanÃ§ada",
             details: error.message
         });
     }
 });
 
-// Rota para listar providers disponíveis
+// Rota para listar providers disponÃ­veis
 app.get('/api/providers', (req, res) => {
     if (!advancedSearch) {
         return res.json({
             available: false,
-            message: 'Motor avançado não disponível'
+            message: 'Motor avanÃ§ado nÃ£o disponÃ­vel'
         });
     }
 
@@ -555,7 +614,7 @@ app.get('/api/providers', (req, res) => {
     });
 });
 
-// Rota para busca paralela (mais rápida mas mais recursos)
+// Rota para busca paralela (mais rÃ¡pida mas mais recursos)
 app.post('/api/search/parallel', searchRateLimiter, async (req, res) => {
     const { query, category = 'Movies', limit = 3 } = req.body;
 
@@ -564,11 +623,11 @@ app.post('/api/search/parallel', searchRateLimiter, async (req, res) => {
     }
 
     if (!advancedSearch) {
-        return res.status(503).json({ error: "Motor avançado não disponível" });
+        return res.status(503).json({ error: "Motor avanÃ§ado nÃ£o disponÃ­vel" });
     }
 
     try {
-        logger.info(`[PARALLEL] ⚡ Busca paralela: "${query}"`);
+        logger.info(`[PARALLEL] âš¡ Busca paralela: "${query}"`);
         const results = await advancedSearch.parallelSearch(query, category, limit);
 
         res.json({
@@ -578,7 +637,7 @@ app.post('/api/search/parallel', searchRateLimiter, async (req, res) => {
         });
 
     } catch (error) {
-        logger.error(`[PARALLEL] ❌ Erro: ${error.message}`);
+        logger.error(`[PARALLEL] âŒ Erro: ${error.message}`);
         res.status(500).json({ error: "Erro na busca paralela", details: error.message });
     }
 });
@@ -594,11 +653,11 @@ app.post('/api/search/extended', searchRateLimiter, async (req, res) => {
     }
 
     if (!extendedSources) {
-        return res.status(503).json({ error: "Fontes estendidas não disponíveis" });
+        return res.status(503).json({ error: "Fontes estendidas nÃ£o disponÃ­veis" });
     }
 
     try {
-        logger.info(`[EXTENDED] 🌐 Busca estendida: "${query}" | Categoria: ${category}`);
+        logger.info(`[EXTENDED] ðŸŒ Busca estendida: "${query}" | Categoria: ${category}`);
         const results = await extendedSources.searchAll(query, category, limit);
 
         // Salvar no cache
@@ -632,12 +691,12 @@ app.post('/api/search/extended', searchRateLimiter, async (req, res) => {
         });
 
     } catch (error) {
-        logger.error(`[EXTENDED] ❌ Erro: ${error.message}`);
+        logger.error(`[EXTENDED] âŒ Erro: ${error.message}`);
         res.status(500).json({ error: "Erro na busca estendida", details: error.message });
     }
 });
 
-// Busca específica por fonte
+// Busca especÃ­fica por fonte
 app.post('/api/search/source/:sourceName', searchRateLimiter, async (req, res) => {
     const { sourceName } = req.params;
     const { query, limit = 10 } = req.body;
@@ -647,11 +706,11 @@ app.post('/api/search/source/:sourceName', searchRateLimiter, async (req, res) =
     }
 
     if (!extendedSources) {
-        return res.status(503).json({ error: "Fontes estendidas não disponíveis" });
+        return res.status(503).json({ error: "Fontes estendidas nÃ£o disponÃ­veis" });
     }
 
     try {
-        logger.info(`[SOURCE] 🎯 Busca em ${sourceName}: "${query}"`);
+        logger.info(`[SOURCE] ðŸŽ¯ Busca em ${sourceName}: "${query}"`);
 
         let results = [];
         switch (sourceName.toLowerCase()) {
@@ -669,7 +728,7 @@ app.post('/api/search/source/:sourceName', searchRateLimiter, async (req, res) =
                 results = await extendedSources.searchBitSearch(query, limit);
                 break;
             default:
-                return res.status(404).json({ error: `Fonte '${sourceName}' não encontrada` });
+                return res.status(404).json({ error: `Fonte '${sourceName}' nÃ£o encontrada` });
         }
 
         res.json({
@@ -678,17 +737,17 @@ app.post('/api/search/source/:sourceName', searchRateLimiter, async (req, res) =
         });
 
     } catch (error) {
-        logger.error(`[SOURCE] ❌ Erro em ${sourceName}: ${error.message}`);
+        logger.error(`[SOURCE] âŒ Erro em ${sourceName}: ${error.message}`);
         res.status(500).json({ error: `Erro na busca em ${sourceName}`, details: error.message });
     }
 });
 
-// Listar fontes estendidas disponíveis
+// Listar fontes estendidas disponÃ­veis
 app.get('/api/sources', (req, res) => {
     if (!extendedSources) {
         return res.json({
             available: false,
-            message: 'Fontes estendidas não disponíveis'
+            message: 'Fontes estendidas nÃ£o disponÃ­veis'
         });
     }
 
@@ -708,24 +767,43 @@ app.post('/api/search/ultra', searchRateLimiter, async (req, res) => {
     }
 
     try {
-        logger.info(`[ULTRA] 🚀 Busca ULTRA: "${query}"`);
+        logger.info(`[ULTRA] ðŸš€ Busca ULTRA: "${query}"`);
 
         const searches = [];
 
         // 1. Fontes Estendidas (YTS, EZTV, etc)
         if (extendedSources) {
-            searches.push(extendedSources.searchAll(query, category, limit));
+            searches.push({ engine: 'extendedSources', run: () => extendedSources.searchAll(query, category, limit) });
         }
 
         // 2. API Multi-Provider
         if (advancedSearch) {
-            searches.push(advancedSearch.search(query, category, limit));
+            searches.push({ engine: 'advancedSearch', run: () => advancedSearch.search(query, category, limit) });
         }
 
         // 3. Puppeteer (fallback)
-        searches.push(performDeepScraping(query));
+        searches.push({ engine: 'deepScraping', run: () => performDeepScraping(query) });
 
-        const results = await Promise.all(searches);
+        const settled = await Promise.allSettled(searches.map((entry) => entry.run()));
+        const failures = [];
+        const results = settled.map((entry, index) => {
+            const engine = searches[index].engine;
+            if (entry.status === 'fulfilled') {
+                const value = Array.isArray(entry.value) ? entry.value : [];
+                if (value.length === 0) {
+                    failures.push({ provider: engine, status: 'empty', error: 'Vazio neste motor.' });
+                }
+                if (Array.isArray(value._diagnostics)) {
+                    failures.push(...value._diagnostics
+                        .filter((item) => item.status !== 'ok')
+                        .map((item) => ({ provider: `${engine}:${item.provider}`, status: item.status || classifyProviderFailure(item.error || ''), count: item.count || 0, error: item.error || item.status })));
+                }
+                return value;
+            }
+
+            failures.push({ provider: engine, status: classifyProviderFailure(entry.reason?.message || ''), error: entry.reason?.message || String(entry.reason || 'Falha desconhecida') });
+            return [];
+        });
         const combined = results.flat();
 
         // Remover duplicatas
@@ -743,22 +821,33 @@ app.post('/api/search/ultra', searchRateLimiter, async (req, res) => {
         // Ordenar por seeds
         const sorted = unique.sort((a, b) => (b.seeds || 0) - (a.seeds || 0));
 
-        logger.info(`[ULTRA] ✅ ${sorted.length} resultados únicos de ${searches.length} motores`);
+        logger.info(`[ULTRA] Ã¢Å“â€¦ ${sorted.length} resultados ÃƒÂºnicos de ${searches.length} motores`);
+
+        if (sorted.length === 0) {
+            return res.status(503).json({
+                error: "Busca ultra sem resultados utilizaveis",
+                details: "Todos os motores retornaram vazio ou falha.",
+                failures,
+                engines: searches.length,
+                results: []
+            });
+        }
 
         res.json({
             source: 'ultra_search',
             engines: searches.length,
+            failures,
             results: sorted
         });
 
     } catch (error) {
-        logger.error(`[ULTRA] ❌ Erro: ${error.message}`);
-        res.status(500).json({ error: "Erro na busca ultra", details: error.message });
+        logger.error(`[ULTRA] Ã¢ÂÅ’ Erro: ${error.message}`);
+        res.status(500).json({ error: "Erro na busca ultra", details: error.message, failures: error?.failures || [] });
     }
 });
 
 // ============================================
-// 🇧🇷 BUSCA PT-BR PRIORITÁRIA (Multi-Query Paralelo)
+// ðŸ‡§ðŸ‡· BUSCA PT-BR PRIORITÃRIA (Multi-Query Paralelo)
 // ============================================
 app.post('/api/search/ptbr', searchRateLimiter, async (req, res) => {
     const { query, limit = 10 } = req.body;
@@ -768,29 +857,29 @@ app.post('/api/search/ptbr', searchRateLimiter, async (req, res) => {
     }
 
     try {
-        logger.info(`[PT-BR] 🇧🇷 Busca PT-BR prioritária: "${query}"`);
+        logger.info(`[PT-BR] ðŸ‡§ðŸ‡· Busca PT-BR prioritÃ¡ria: "${query}"`);
 
-        // Gerar variações PT-BR da query
+        // Gerar variaÃ§Ãµes PT-BR da query
         const ptbrQueries = PTBRPriority.enhanceQueryForPTBR(query);
-        logger.info(`[PT-BR] Variações geradas: ${ptbrQueries.join(' | ')}`);
+        logger.info(`[PT-BR] VariaÃ§Ãµes geradas: ${ptbrQueries.join(' | ')}`);
 
-        // Executar buscas em PARALELO para todas as variações
+        // Executar buscas em PARALELO para todas as variaÃ§Ãµes
         const allSearches = [];
 
         for (const pq of ptbrQueries) {
-            // Puppeteer scraping para cada variação
+            // Puppeteer scraping para cada variaÃ§Ã£o
             allSearches.push(
                 performDeepScraping(pq).catch(() => [])
             );
 
-            // Fontes estendidas para cada variação
+            // Fontes estendidas para cada variaÃ§Ã£o
             if (extendedSources) {
                 allSearches.push(
                     extendedSources.searchAll(pq, 'All', Math.ceil(limit / ptbrQueries.length)).catch(() => [])
                 );
             }
 
-            // API multi-provider para cada variação
+            // API multi-provider para cada variaÃ§Ã£o
             if (advancedSearch) {
                 allSearches.push(
                     advancedSearch.search(pq, 'All', Math.ceil(limit / ptbrQueries.length)).catch(() => [])
@@ -813,14 +902,14 @@ app.post('/api/search/ptbr', searchRateLimiter, async (req, res) => {
             return true;
         });
 
-        // Aplicar priorização PT-BR com score
+        // Aplicar priorizaÃ§Ã£o PT-BR com score
         const prioritized = PTBRPriority.prioritizePTBRResults(unique);
 
         // Separar resultados por categoria
         const ptbrResults = prioritized.filter(r => r.hasPTBRAudio || r.hasPTBRSubs);
         const otherResults = prioritized.filter(r => !r.hasPTBRAudio && !r.hasPTBRSubs);
 
-        logger.info(`[PT-BR] ✅ ${prioritized.length} resultados (${ptbrResults.length} PT-BR, ${otherResults.length} outros)`);
+        logger.info(`[PT-BR] âœ… ${prioritized.length} resultados (${ptbrResults.length} PT-BR, ${otherResults.length} outros)`);
 
         // Salvar no cache
         if (prioritized.length > 0) {
@@ -845,19 +934,19 @@ app.post('/api/search/ptbr', searchRateLimiter, async (req, res) => {
         });
 
     } catch (error) {
-        logger.error(`[PT-BR] ❌ Erro: ${error.message}`);
+        logger.error(`[PT-BR] âŒ Erro: ${error.message}`);
         res.status(500).json({ error: "Erro na busca PT-BR", details: error.message });
     }
 });
 
 // ============================================
-// 📺 BUSCA DE SÉRIES (Season-Aware Intelligence)
+// ðŸ“º BUSCA DE SÃ‰RIES (Season-Aware Intelligence)
 // ============================================
 app.post('/api/search/series', searchRateLimiter, async (req, res) => {
     const { query, season, limit = 15 } = req.body;
 
     if (!query || query.trim().length < 2) {
-        return res.status(400).json({ error: "Nome da série insuficiente" });
+        return res.status(400).json({ error: "Nome da sÃ©rie insuficiente" });
     }
 
     try {
@@ -869,14 +958,14 @@ app.post('/api/search/series', searchRateLimiter, async (req, res) => {
             .replace(/\s+/g, ' ')
             .trim();
         const normalizedSeriesName = seriesName.replace(/[:\-]+/g, ' ').replace(/\s+/g, ' ').trim();
-        logger.info(`[SERIES] 📺 Busca de série: "${seriesName}" ${season ? `| Temporada ${season}` : '| Todas'}`);
+        logger.info(`[SERIES] ðŸ“º Busca de sÃ©rie: "${seriesName}" ${season ? `| Temporada ${season}` : '| Todas'}`);
 
-        // Construir variações de busca inteligentes para séries
+        // Construir variaÃ§Ãµes de busca inteligentes para sÃ©ries
         const seriesQueries = [];
 
         if (season) {
             const sNum = String(season).padStart(2, '0');
-            // Padrões comuns para temporadas específicas
+            // PadrÃµes comuns para temporadas especÃ­ficas
             seriesQueries.push(`${seriesName} S${sNum}`);
             seriesQueries.push(`${seriesName} S${sNum} complete`);
             seriesQueries.push(`${seriesName} S${sNum} dublado`);
@@ -889,7 +978,7 @@ app.post('/api/search/series', searchRateLimiter, async (req, res) => {
                 seriesQueries.push(`${normalizedSeriesName} S${sNum} 1080p`);
             }
         } else {
-            // Pack completo da série
+            // Pack completo da sÃ©rie
             seriesQueries.push(`${seriesName} complete series`);
             seriesQueries.push(`${seriesName} season pack`);
             seriesQueries.push(`${seriesName} S01`);
@@ -906,7 +995,7 @@ app.post('/api/search/series', searchRateLimiter, async (req, res) => {
 
         const dedupedQueries = [...new Set(seriesQueries.map(q => q.replace(/\s+/g, ' ').trim()).filter(Boolean))];
 
-        logger.info(`[SERIES] Variações: ${dedupedQueries.join(' | ')}`);
+        logger.info(`[SERIES] VariaÃ§Ãµes: ${dedupedQueries.join(' | ')}`);
 
         // Executar buscas em paralelo
         const allSearches = [];
@@ -915,7 +1004,7 @@ app.post('/api/search/series', searchRateLimiter, async (req, res) => {
             allSearches.push(performDeepScraping(sq).catch(() => []));
 
             if (extendedSources) {
-                // EZTV é a melhor fonte para séries
+                // EZTV Ã© a melhor fonte para sÃ©ries
                 allSearches.push(extendedSources.searchEZTV(sq, Math.ceil(limit / 2)).catch(() => []));
                 allSearches.push(extendedSources.searchBitSearch(sq, Math.ceil(limit / 3)).catch(() => []));
             }
@@ -940,11 +1029,11 @@ app.post('/api/search/series', searchRateLimiter, async (req, res) => {
             return true;
         });
 
-        // Detectar e categorizar conteúdo de série
+        // Detectar e categorizar conteÃºdo de sÃ©rie
         const categorized = unique.map(r => {
             const title = (r.title || '').toUpperCase();
 
-            // Detectar temporada e episódio
+            // Detectar temporada e episÃ³dio
             const seasonMatch = title.match(/S(\d{1,2})/i);
             const episodeMatch = title.match(/E(\d{1,2})/i);
             const isCompletePack = /\b(complete|pack|completa|all\s*seasons?)\b/i.test(title);
@@ -964,7 +1053,7 @@ app.post('/api/search/series', searchRateLimiter, async (req, res) => {
             };
         });
 
-        // Aplicar priorização PT-BR
+        // Aplicar priorizaÃ§Ã£o PT-BR
         const prioritized = PTBRPriority.prioritizePTBRResults(categorized);
 
         // Ordenar: Season Packs primeiro > PT-BR > Seeds
@@ -977,7 +1066,7 @@ app.post('/api/search/series', searchRateLimiter, async (req, res) => {
             if (a.isSeasonPack && !b.isSeasonPack) return -1;
             if (!a.isSeasonPack && b.isSeasonPack) return 1;
 
-            // PT-BR prioritário
+            // PT-BR prioritÃ¡rio
             const aPTBR = (a.hasPTBRAudio ? 100 : 0) + (a.hasPTBRSubs ? 50 : 0);
             const bPTBR = (b.hasPTBRAudio ? 100 : 0) + (b.hasPTBRSubs ? 50 : 0);
             if (aPTBR !== bPTBR) return bPTBR - aPTBR;
@@ -986,7 +1075,7 @@ app.post('/api/search/series', searchRateLimiter, async (req, res) => {
             return (b.seeds || 0) - (a.seeds || 0);
         });
 
-        // Estatísticas
+        // EstatÃ­sticas
         const stats = {
             total: sorted.length,
             completePacks: sorted.filter(r => r.isCompletePack).length,
@@ -995,7 +1084,7 @@ app.post('/api/search/series', searchRateLimiter, async (req, res) => {
             ptbrCount: sorted.filter(r => r.hasPTBRAudio || r.hasPTBRSubs).length
         };
 
-        logger.info(`[SERIES] ✅ ${stats.total} resultados | ${stats.completePacks} packs completos | ${stats.seasonPacks} packs de temporada | ${stats.ptbrCount} PT-BR`);
+        logger.info(`[SERIES] âœ… ${stats.total} resultados | ${stats.completePacks} packs completos | ${stats.seasonPacks} packs de temporada | ${stats.ptbrCount} PT-BR`);
 
         res.json({
             source: 'series_search',
@@ -1006,13 +1095,13 @@ app.post('/api/search/series', searchRateLimiter, async (req, res) => {
         });
 
     } catch (error) {
-        logger.error(`[SERIES] ❌ Erro: ${error.message}`);
-        res.status(500).json({ error: "Erro na busca de séries", details: error.message });
+        logger.error(`[SERIES] âŒ Erro: ${error.message}`);
+        res.status(500).json({ error: "Erro na busca de sÃ©ries", details: error.message });
     }
 });
 
 // ============================================
-// 🧠 BUSCA SEMÂNTICA COM IA
+// ðŸ§  BUSCA SEMÃ‚NTICA COM IA
 // ============================================
 app.post('/api/search/semantic', searchRateLimiter, async (req, res) => {
     const { query, limit = 10, useAI = true } = req.body;
@@ -1022,11 +1111,11 @@ app.post('/api/search/semantic', searchRateLimiter, async (req, res) => {
     }
 
     try {
-        logger.info(`[SEMANTIC] 🧠 Busca semântica: "${query}"`);
+        logger.info(`[SEMANTIC] ðŸ§  Busca semÃ¢ntica: "${query}"`);
 
-        // 1. Analisar intenção do usuário
+        // 1. Analisar intenÃ§Ã£o do usuÃ¡rio
         const intents = SemanticSearch.analyzeIntent(query);
-        logger.info(`[SEMANTIC] Intenções: ${JSON.stringify(intents)}`);
+        logger.info(`[SEMANTIC] IntenÃ§Ãµes: ${JSON.stringify(intents)}`);
 
         // 2. Gerar queries otimizadas (com ou sem IA)
         let optimizedQueries;
@@ -1071,13 +1160,13 @@ app.post('/api/search/semantic', searchRateLimiter, async (req, res) => {
             return true;
         });
 
-        // 5. Aplicar priorização PT-BR
+        // 5. Aplicar priorizaÃ§Ã£o PT-BR
         const prioritized = PTBRPriority.prioritizePTBRResults(unique);
 
-        // 6. Filtrar e pontuar por intenção
+        // 6. Filtrar e pontuar por intenÃ§Ã£o
         const filtered = SemanticSearch.filterByIntent(prioritized, intents);
 
-        logger.info(`[SEMANTIC] ✅ ${filtered.length} resultados (${optimizedQueries.length} queries)`);
+        logger.info(`[SEMANTIC] âœ… ${filtered.length} resultados (${optimizedQueries.length} queries)`);
 
         res.json({
             source: 'semantic_search',
@@ -1090,8 +1179,8 @@ app.post('/api/search/semantic', searchRateLimiter, async (req, res) => {
         });
 
     } catch (error) {
-        logger.error(`[SEMANTIC] ❌ Erro: ${error.message}`);
-        res.status(500).json({ error: "Erro na busca semântica", details: error.message });
+        logger.error(`[SEMANTIC] âŒ Erro: ${error.message}`);
+        res.status(500).json({ error: "Erro na busca semÃ¢ntica", details: error.message });
     }
 });
 

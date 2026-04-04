@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useVideo, useVideoFeed } from '@/hooks/useVideos';
 import { PlayerComponent } from '@/components/PlayerComponent';
@@ -6,14 +6,88 @@ import { TorrentPlayer } from '@/components/TorrentPlayer';
 import { Button } from '@/components/ui/button';
 import { ChevronLeft, ChevronRight, Calendar, Clock, Share2, ThumbsUp, ThumbsDown, MessageSquare, Plus, Send, User as UserIcon, Loader2, CheckCircle, Trash2, Database } from 'lucide-react';
 import { AddonStreamDialog } from '@/components/AddonStreamDialog';
+import { FeatureErrorBoundary } from '@/components/FeatureErrorBoundary';
 import { STORAGE_BASE_URL } from '@/lib/axios';
 import apiClient from '@/lib/axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useAuthStore } from '@/stores/auth.store';
 import { cn } from '@/lib/utils';
 import VideoService from '@/services/api/video.service';
+import { addonService } from '@/services/addon.service';
+import { usePlaybackPreferencesStore } from '@/stores/playbackPreferences.store';
 
 import { SynergyMonitor } from '@/components/SynergyMonitor';
+
+interface AddonRadarStream {
+    title?: string;
+    name?: string;
+    description?: string;
+    addonName?: string;
+    url?: string;
+    infoHash?: string;
+    fileIdx?: number;
+    sources?: string[];
+    behaviorHints?: {
+        filename?: string;
+    };
+    arconteSignal?: {
+        trustLevel?: 'high' | 'medium' | 'low' | null;
+        label?: string | null;
+    } | null;
+}
+
+const normalizeRadarText = (value?: string) =>
+    String(value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase();
+
+const getRadarText = (stream: AddonRadarStream) =>
+    normalizeRadarText([stream.title, stream.name, stream.description, stream.addonName].filter(Boolean).join(' '));
+
+const getRadarPortugueseAudioScore = (stream: AddonRadarStream) => {
+    const haystack = getRadarText(stream);
+    let score = 0;
+
+    if (/\bdublado\b|\bpt-br\b|\bptbr\b|\bportugues\b|\bportuguese\b|\baudio pt\b|\baudio br\b/.test(haystack)) {
+        score += 100;
+    }
+
+    if (/\blat\b/.test(haystack)) {
+        score += 10;
+    }
+
+    if (/\benglish\b|\beng\b|\bjapanese\b|\bjap\b/.test(haystack) && score === 0) {
+        score -= 20;
+    }
+
+    return score;
+};
+
+const getRadarPortugueseSubtitleScore = (stream: AddonRadarStream) => {
+    const haystack = getRadarText(stream);
+    if (/\blegenda pt\b|\blegenda pt-br\b|\bsub pt\b|\bsub pt-br\b|\bsubtitle pt\b|\bsubtitle pt-br\b|\bsubs pt\b|\bsubs pt-br\b/.test(haystack)) {
+        return 60;
+    }
+
+    if (/\bpt-br\b|\bptbr\b|\bportugues\b|\bportuguese\b/.test(haystack) && /\blegenda\b|\blegendado\b|\bsub\b|\bsubtitle\b|\bsubs\b/.test(haystack)) {
+        return 40;
+    }
+
+    return 0;
+};
+
+const getRadarAvailability = (stream: AddonRadarStream) => {
+    const raw = `${stream.title || ''} ${stream.name || ''} ${stream.description || ''}`;
+    const peersMatch = raw.match(/(?:ðŸ‘¤|peers?)[^\d]{0,6}(\d{1,5})/i);
+    const seedsMatch = raw.match(/seed(?:s|ers?)?[^\d]{0,6}(\d{1,5})/i);
+    const swarmMatches = [...raw.matchAll(/(?:ðŸ‘¤|seed(?:s|ers?)?|peer(?:s)?)[^\d]{0,6}(\d{1,5})/gi)];
+    const swarm = swarmMatches.reduce((best, match) => Math.max(best, Number(match[1] || 0)), 0);
+    const peers = peersMatch ? Number(peersMatch[1]) : 0;
+    const seeds = seedsMatch ? Number(seedsMatch[1]) : 0;
+
+    return seeds * 4 + peers * 2 + swarm;
+};
 
 export const VideoDetailsPage: React.FC = () => {
     const [streamDialog, setStreamDialog] = useState(false);
@@ -21,14 +95,22 @@ export const VideoDetailsPage: React.FC = () => {
     const { video, loading: videoLoading, error } = useVideo(id);
     const { videos: allVideos } = useVideoFeed();
     const { user, isAuthenticated } = useAuthStore();
+    const { preferPortugueseAudio, acceptPortugueseSubtitles } = usePlaybackPreferencesStore();
 
     const readyVideos = allVideos.filter(v => v.status === 'READY');
     const loading = videoLoading;
+    const [trustedSourceHint, setTrustedSourceHint] = useState<{
+        label: string;
+        tone: 'emerald' | 'sky' | 'amber';
+        addonName: string;
+    } | null>(null);
+    const [isEvaluatingTrustedSource, setIsEvaluatingTrustedSource] = useState(false);
+    const [trustedPlayableStream, setTrustedPlayableStream] = useState<AddonRadarStream | null>(null);
 
-    // 🧠 V2.5: Boost de Demanda ao abrir a página
+    // ðŸ§  V2.5: Boost de Demanda ao abrir a pÃ¡gina
     useEffect(() => {
         if (id && video && video.status !== 'READY') {
-            console.log(`🧠 [Demand] Boosting demand for ${video.title} (Status: ${video.status})`);
+            console.log(`ðŸ§  [Demand] Boosting demand for ${video.title} (Status: ${video.status})`);
             VideoService.boostDemand(id, 'PLAY_ATTEMPT');
         }
     }, [id, video]);
@@ -67,6 +149,89 @@ export const VideoDetailsPage: React.FC = () => {
         }
     }, [id, user]);
 
+    useEffect(() => {
+        let cancelled = false;
+
+        const evaluateTrustedSource = async () => {
+            if (!video || video.status !== 'CATALOG') {
+                setTrustedSourceHint(null);
+                setTrustedPlayableStream(null);
+                return;
+            }
+
+            const lookupId = video.imdbId || video.tmdbId || video.title;
+            if (!lookupId) {
+                setTrustedSourceHint(null);
+                setTrustedPlayableStream(null);
+                return;
+            }
+
+            setIsEvaluatingTrustedSource(true);
+            try {
+                const result = await addonService.getStreams('movie', String(lookupId), video.title, {
+                    preferPortugueseAudio,
+                    acceptPortugueseSubtitles,
+                    userId: user?.id,
+                });
+
+                if (cancelled) return;
+
+                const streams = Array.isArray(result) ? result as AddonRadarStream[] : Array.isArray(result?.streams) ? result.streams as AddonRadarStream[] : [];
+                const best = streams.find((stream) => !!(stream.url || stream.infoHash));
+
+                if (!best) {
+                    setTrustedSourceHint(null);
+                    setTrustedPlayableStream(null);
+                    return;
+                }
+
+                setTrustedPlayableStream(best);
+
+                const trustLevel = best.arconteSignal?.trustLevel;
+                const ptAudio = getRadarPortugueseAudioScore(best);
+                const ptSubtitle = getRadarPortugueseSubtitleScore(best);
+                const availability = getRadarAvailability(best);
+                const addonName = best.addonName || 'Addon Radar';
+
+                if (trustLevel === 'high' && (ptAudio > 0 || availability >= 40)) {
+                    setTrustedSourceHint({
+                        label: best.arconteSignal?.label || 'Arconte encontrou uma fonte confiavel para assistir agora',
+                        tone: 'emerald',
+                        addonName,
+                    });
+                    return;
+                }
+
+                if (trustLevel === 'medium' || ptSubtitle > 0 || availability >= 25) {
+                    setTrustedSourceHint({
+                        label: best.arconteSignal?.label || (ptSubtitle > 0 ? 'Ha uma boa chance com legenda PT' : 'O Arconte encontrou uma fonte promissora'),
+                        tone: ptSubtitle > 0 ? 'sky' : 'amber',
+                        addonName,
+                    });
+                    return;
+                }
+
+                setTrustedSourceHint(null);
+                setTrustedPlayableStream(null);
+            } catch {
+                if (!cancelled) {
+                    setTrustedSourceHint(null);
+                    setTrustedPlayableStream(null);
+                }
+            } finally {
+                if (!cancelled) {
+                    setIsEvaluatingTrustedSource(false);
+                }
+            }
+        };
+
+        evaluateTrustedSource();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [video, preferPortugueseAudio, acceptPortugueseSubtitles, user?.id]);
+
     const checkFavoriteStatus = async () => {
         if (!id || !user) return;
         try {
@@ -78,13 +243,13 @@ export const VideoDetailsPage: React.FC = () => {
     };
 
     const toggleMyList = async () => {
-        if (!id || !user) return alert('Faça login para salvar no cofre!');
+        if (!id || !user) return alert('FaÃ§a login para salvar no cofre!');
 
         try {
             const res = await apiClient.post(`/users/${user.id}/favorites/${id}`);
             setIsInMyList(res.data.favorited);
 
-            // 🧠 V2.5: Boost de demanda ao favoritar
+            // ðŸ§  V2.5: Boost de demanda ao favoritar
             if (res.data.favorited) {
                 VideoService.boostDemand(id, 'FAVORITE');
             }
@@ -99,14 +264,35 @@ export const VideoDetailsPage: React.FC = () => {
         setTimeout(() => setJustShared(false), 2000);
     };
 
-    const handleMaterialize = async () => {
+    const handleMaterialize = async (stream?: AddonRadarStream | null) => {
         if (!id) return;
         setIsMaterializing(true);
         try {
-            await apiClient.post(`/videos/${id}/play`);
+            const streamCandidate = stream || null;
+            const magnetURI = stream?.url?.startsWith('magnet:')
+                ? stream.url
+                : (stream?.infoHash ? `magnet:?xt=urn:btih:${stream.infoHash}` : undefined);
+            const payload = magnetURI ? {
+                magnetURI,
+                infoHash: streamCandidate?.infoHash,
+                sourceSite: streamCandidate?.addonName,
+                quality: /2160|4k/i.test(`${streamCandidate?.title || ''} ${streamCandidate?.name || ''}`)
+                    ? '2160p'
+                    : /1080/i.test(`${streamCandidate?.title || ''} ${streamCandidate?.name || ''}`)
+                        ? '1080p'
+                        : /720/i.test(`${streamCandidate?.title || ''} ${streamCandidate?.name || ''}`)
+                            ? '720p'
+                            : undefined,
+                language: streamCandidate && getRadarPortugueseAudioScore(streamCandidate) > 0
+                    ? 'pt-BR'
+                    : streamCandidate && getRadarPortugueseSubtitleScore(streamCandidate) > 0
+                        ? 'pt-BR-sub'
+                        : undefined,
+            } : undefined;
+            await apiClient.post(`/videos/${id}/play`, payload);
             window.location.reload();
         } catch (e) {
-            alert('Erro ao iniciar materialização.');
+            alert('Erro ao iniciar materializaÃ§Ã£o.');
         } finally {
             setIsMaterializing(false);
         }
@@ -132,7 +318,7 @@ export const VideoDetailsPage: React.FC = () => {
     };
 
     const handleInteraction = async (isLike: boolean) => {
-        if (!isAuthenticated) return alert('Faça login para avaliar!');
+        if (!isAuthenticated) return alert('FaÃ§a login para avaliar!');
         try {
             await apiClient.post(`/videos/${id}/like`, { userId: user?.id, isLike });
             fetchStats();
@@ -182,15 +368,20 @@ export const VideoDetailsPage: React.FC = () => {
                 </div>
                 <Link to="/">
                     <Button className="h-14 px-10 rounded-2xl bg-white text-black font-black uppercase text-xs tracking-widest group">
-                        <ChevronLeft className="mr-2 group-hover:-translate-x-1 transition-transform" /> Retornar ao Núcleo
+                        <ChevronLeft className="mr-2 group-hover:-translate-x-1 transition-transform" /> Retornar ao NÃºcleo
                     </Button>
                 </Link>
             </div>
         );
     }
 
-    const hlsFullUrl = video.hlsPath && !video.hlsPath.startsWith('magnet:') ? `${STORAGE_BASE_URL}/${video.hlsPath}` : null;
+    const hasMagnetStream = Boolean(video.hlsPath && video.hlsPath.startsWith('magnet:'));
+    const hasHlsStream = Boolean(video.hlsPath && !video.hlsPath.startsWith('magnet:'));
+    const hasLocalAsset = Boolean(video.storageKey);
+    const hlsFullUrl = hasHlsStream ? `${STORAGE_BASE_URL}/${video.hlsPath}` : null;
     const streamUrl = `http://localhost:3000/api/v1/videos/${video.id}/stream`;
+    const shouldUseDirectPlayer = hasHlsStream || (video.status === 'READY' && hasLocalAsset);
+    const shouldUseTorrentPlayer = hasMagnetStream && ['NEXUS', 'PROCESSING', 'READY'].includes(video.status);
 
     return (
         <div className="min-h-screen bg-background text-foreground pb-20 pt-32 relative overflow-hidden">
@@ -209,11 +400,16 @@ export const VideoDetailsPage: React.FC = () => {
             {/* Cinematic Player Section */}
             <div className="relative w-full aspect-video md:h-[85vh] bg-black overflow-hidden group">
                 <div className="absolute inset-0 flex items-center justify-center">
-                    {video.status === 'READY' ? (
-                        // Vídeo local com streaming direto ou via Torrent Gateway
-                        <PlayerComponent hlsUrl={hlsFullUrl || streamUrl} />
+                    {shouldUseDirectPlayer ? (
+                        // VÃ­deo local com streaming direto ou via Torrent Gateway
+                        <FeatureErrorBoundary
+                            title="Player temporariamente instavel"
+                            description="O stream encontrou um erro visual. Voce pode tentar de novo sem sair desta tela."
+                        >
+                            <PlayerComponent hlsUrl={hlsFullUrl || streamUrl} />
+                        </FeatureErrorBoundary>
                     ) : video.status === 'CATALOG' ? (
-                        // CLIQUE PARA INICIAR STREAMING (CATÁLOGO)
+                        // CLIQUE PARA INICIAR STREAMING (CATÃLOGO)
                         <div className="w-full h-full relative group">
                             <img
                                 src={video.thumbnailPath ? (video.thumbnailPath.startsWith('http') ? video.thumbnailPath : `${STORAGE_BASE_URL}/${video.thumbnailPath}`) : ''}
@@ -222,10 +418,21 @@ export const VideoDetailsPage: React.FC = () => {
                             <div className="absolute inset-0 bg-gradient-to-t from-black via-black/50 to-transparent" />
 
                             <div className="relative z-20 flex flex-col items-center justify-center h-full space-y-8">
+                                {trustedSourceHint && (
+                                    <div className={`px-4 py-2 rounded-full border text-[10px] font-black uppercase tracking-[0.25em] ${
+                                        trustedSourceHint.tone === 'emerald'
+                                            ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/30'
+                                            : trustedSourceHint.tone === 'sky'
+                                                ? 'bg-sky-500/15 text-sky-300 border-sky-400/30'
+                                                : 'bg-amber-500/15 text-amber-200 border-amber-400/30'
+                                    }`}>
+                                        {trustedSourceHint.label} via {trustedSourceHint.addonName}
+                                    </div>
+                                )}
                                 <motion.button
                                     whileHover={{ scale: 1.1 }}
                                     whileTap={{ scale: 0.95 }}
-                                    onClick={handleMaterialize}
+                                    onClick={() => handleMaterialize(trustedSourceHint?.tone === 'emerald' ? trustedPlayableStream : null)}
                                     className="w-24 h-24 rounded-full bg-primary text-black flex items-center justify-center shadow-[0_0_50px_rgba(var(--primary),0.6)] group-hover:shadow-[0_0_80px_rgba(var(--primary),0.8)] transition-all duration-500"
                                 >
                                     <svg viewBox="0 0 24 24" fill="currentColor" className="w-10 h-10 ml-1">
@@ -233,30 +440,52 @@ export const VideoDetailsPage: React.FC = () => {
                                     </svg>
                                 </motion.button>
                                 <div className="text-center">
-                                    <h3 className="text-2xl font-black text-white uppercase italic tracking-tight">Iniciar Transmissão</h3>
-                                    <p className="text-[10px] font-black text-primary uppercase tracking-[0.3em] mt-2">Clique para materializar do Nexus</p>
+                                    <h3 className="text-2xl font-black text-white uppercase italic tracking-tight">Iniciar Transmissao</h3>
+                                    <p className="text-[10px] font-black text-primary uppercase tracking-[0.3em] mt-2">
+                                        {isEvaluatingTrustedSource
+                                            ? 'Arconte esta avaliando a melhor fonte'
+                                            : trustedSourceHint?.tone === 'emerald'
+                                                ? 'Clique para assistir direto com a fonte preferida da sua casa'
+                                                : 'Clique para materializar do Nexus'}
+                                    </p>
+                                    <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+                                        <Button
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                setStreamDialog(true);
+                                            }}
+                                            className="h-11 px-5 rounded-2xl bg-black/60 border border-white/10 text-white hover:bg-black/80 font-black uppercase text-[10px] tracking-[0.2em]"
+                                        >
+                                            Ver Addons
+                                        </Button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
-                    ) : video.status === 'NEXUS' && video.hlsPath ? (
-                        <div className="w-full h-full relative">
-                            <TorrentPlayer
-                                magnetURI={video.hlsPath}
-                                videoId={video.id}
-                                onReady={handleTorrentReady}
-                                onProgress={handleProgress}
-                            />
-                            <div className="absolute top-6 right-6 z-20">
-                                <Button
-                                    onClick={handleMaterialize}
-                                    disabled={isMaterializing}
-                                    className="h-12 px-5 rounded-2xl bg-black/70 border border-white/10 text-white hover:bg-black/90 font-black uppercase tracking-[0.2em] text-[10px]"
-                                >
-                                    {isMaterializing ? <Loader2 size={14} className="mr-2 animate-spin" /> : <Database size={14} className="mr-2" />}
-                                    Materializar
-                                </Button>
+                    ) : shouldUseTorrentPlayer ? (
+                        <FeatureErrorBoundary
+                            title="Player torrent isolado"
+                            description="O player P2P falhou nesta tentativa. A tela segue viva para trocar a fonte ou tentar novamente."
+                        >
+                            <div className="w-full h-full relative">
+                                <TorrentPlayer
+                                    magnetURI={video.hlsPath!}
+                                    videoId={video.id}
+                                    onReady={handleTorrentReady}
+                                    onProgress={handleProgress}
+                                />
+                                <div className="absolute top-6 right-6 z-20">
+                                    <Button
+                                        onClick={() => handleMaterialize()}
+                                        disabled={isMaterializing}
+                                        className="h-12 px-5 rounded-2xl bg-black/70 border border-white/10 text-white hover:bg-black/90 font-black uppercase tracking-[0.2em] text-[10px]"
+                                    >
+                                        {isMaterializing ? <Loader2 size={14} className="mr-2 animate-spin" /> : <Database size={14} className="mr-2" />}
+                                        Materializar
+                                    </Button>
+                                </div>
                             </div>
-                        </div>
+                        </FeatureErrorBoundary>
                     ) : (
                         // Processing UI
                         <div className="w-full h-full flex flex-col items-center justify-center bg-black relative">
@@ -266,7 +495,7 @@ export const VideoDetailsPage: React.FC = () => {
                                     Nexus <span className="text-gradient-primary">Processing</span>
                                 </h2>
                                 <p className="text-white/40 text-sm leading-relaxed font-medium uppercase tracking-wide">
-                                    Aguarde... o ativo está sendo preparado.
+                                    Aguarde... o ativo estÃ¡ sendo preparado.
                                 </p>
                             </div>
                         </div>
@@ -324,11 +553,11 @@ export const VideoDetailsPage: React.FC = () => {
                                 "text-lg md:text-xl text-white/50 leading-relaxed max-w-4xl font-medium transition-all duration-500",
                                 !isDescriptionExpanded && "line-clamp-3"
                             )}>
-                                {video.description || "Nenhuma especificação técnica disponível para este ativo. A transmissão segue os protocolos de criptografia e distribuição Nexus Forge."}
+                                {video.description || "Nenhuma especificaÃ§Ã£o tÃ©cnica disponÃ­vel para este ativo. A transmissÃ£o segue os protocolos de criptografia e distribuiÃ§Ã£o Nexus Forge."}
                             </p>
                             {!isDescriptionExpanded && video.description && video.description.length > 200 && (
                                 <span className="text-primary text-xs font-black uppercase tracking-widest mt-2 block group-hover/desc:translate-x-1 transition-transform">
-                                    [+] EXPANDIR DADOS TÁTICOS
+                                    [+] EXPANDIR DADOS TÃTICOS
                                 </span>
                             )}
                         </div>
@@ -409,13 +638,13 @@ export const VideoDetailsPage: React.FC = () => {
                             <button
                                 onClick={async () => {
                                     if (!id) return;
-                                    if (window.confirm('🚨 PERIGO: Apagar este ativo permanentemente? Isso removerá todos os arquivos do servidor.')) {
+                                    if (window.confirm('ðŸš¨ PERIGO: Apagar este ativo permanentemente? Isso removerÃ¡ todos os arquivos do servidor.')) {
                                         try {
                                             await VideoService.delete(id);
                                             alert('Ativo purgado com sucesso.');
                                             window.location.href = '/';
                                         } catch (e) {
-                                            alert('Falha crítica na purga.');
+                                            alert('Falha crÃ­tica na purga.');
                                         }
                                     }
                                 }}
@@ -453,7 +682,7 @@ export const VideoDetailsPage: React.FC = () => {
                                     <textarea
                                         value={commentText}
                                         onChange={(e) => setCommentText(e.target.value)}
-                                        placeholder="Submeter relatório técnico de transmissão..."
+                                        placeholder="Submeter relatÃ³rio tÃ©cnico de transmissÃ£o..."
                                         className="w-full bg-black/40 border border-white/10 rounded-2xl p-6 text-sm font-medium focus:border-primary/50 focus:ring-4 focus:ring-primary/10 outline-none transition-all min-h-[140px] resize-none text-white placeholder:text-white/20"
                                     />
                                     <div className="flex justify-end">
@@ -567,13 +796,21 @@ export const VideoDetailsPage: React.FC = () => {
                 </aside>
             </div>
             {/* Addon Stream Dialog */}
-            <AddonStreamDialog
-                isOpen={streamDialog}
-                onClose={() => setStreamDialog(false)}
-                type={(video?.category === 'series' || video?.tags?.includes('tv')) ? 'series' : 'movie'}
-                id={video?.imdbId || video?.tmdbId || video?.title || ''}
-                title={video?.title || ''}
-            />
+            <FeatureErrorBoundary
+                title="Modal de addons isolado"
+                description="As fontes falharam nesta tentativa, mas a tela principal continua pronta para uma nova busca."
+                className="fixed inset-0 z-[120] flex items-center justify-center pointer-events-none"
+            >
+                <div className="pointer-events-auto">
+                    <AddonStreamDialog
+                        isOpen={streamDialog}
+                        onClose={() => setStreamDialog(false)}
+                        type={(video?.category === 'series' || video?.tags?.includes('tv')) ? 'series' : 'movie'}
+                        id={video?.imdbId || video?.tmdbId || video?.title || ''}
+                        title={video?.title || ''}
+                    />
+                </div>
+            </FeatureErrorBoundary>
         </div>
     );
 };

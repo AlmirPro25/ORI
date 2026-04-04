@@ -27,6 +27,9 @@ type ParsedStreamId = {
 
 type StreamContext = {
     title?: string;
+    preferPortugueseAudio?: boolean;
+    acceptPortugueseSubtitles?: boolean;
+    userId?: string;
 };
 
 export class AddonService {
@@ -197,6 +200,41 @@ export class AddonService {
             .toLowerCase();
     }
 
+    private static parseStoredTasteProfile(raw?: string | null) {
+        if (!raw) {
+            return {
+                categories: {} as Record<string, number>,
+                tags: {} as Record<string, number>,
+                titleFamilies: {} as Record<string, number>,
+                languageSignals: {} as Record<string, number>,
+                preferredQuality: '1080p',
+            };
+        }
+
+        try {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed === 'object') {
+                return {
+                    categories: parsed.categories || {},
+                    tags: parsed.tags || {},
+                    titleFamilies: parsed.titleFamilies || {},
+                    languageSignals: parsed.languageSignals || {},
+                    preferredQuality: parsed.preferredQuality || '1080p',
+                };
+            }
+        } catch {
+            // fallback abaixo
+        }
+
+        return {
+            categories: {} as Record<string, number>,
+            tags: {} as Record<string, number>,
+            titleFamilies: {} as Record<string, number>,
+            languageSignals: {} as Record<string, number>,
+            preferredQuality: '1080p',
+        };
+    }
+
     private static getEpisodeSpecificityScore(stream: any, context: StreamContext = {}) {
         const haystack = this.normalizeText([
             stream?.title,
@@ -254,6 +292,16 @@ export class AddonService {
         }, 0);
     }
 
+    private static extractAvailabilityScore(stream: any) {
+        const haystack = `${stream?.title || ''} ${stream?.name || ''} ${stream?.description || ''}`;
+        const peersMatch = haystack.match(/(?:👤|peers?)[^\d]{0,6}(\d{1,5})/i);
+        const seedsMatch = haystack.match(/seed(?:s|ers?)?[^\d]{0,6}(\d{1,5})/i);
+        const peers = peersMatch ? Number(peersMatch[1]) : 0;
+        const seeds = seedsMatch ? Number(seedsMatch[1]) : 0;
+        const swarm = this.extractSwarmScore(stream);
+        return (seeds * 4) + (peers * 2) + swarm;
+    }
+
     private static hasPortugueseHint(title?: string) {
         const normalized = this.normalizeText(title);
         if (!normalized) return false;
@@ -270,20 +318,25 @@ export class AddonService {
         ].filter(Boolean).join(' '));
     }
 
+    private static hasExplicitPortugueseAudio(stream: any) {
+        const haystack = this.getStreamText(stream);
+        return /\bdublado\b|\bpt-br\b|\bptbr\b|\bportugues\b|\bportuguese\b|\baudio pt\b|\baudio br\b|\bdub pt\b|\bdubbed pt\b/.test(haystack);
+    }
+
     private static getPortugueseAudioScore(stream: any) {
         const haystack = this.getStreamText(stream);
         let score = 0;
 
-        if (/\bdublado\b|\bdual audio\b|\bdual-audio\b|\bpt-br\b|\bportugues\b|\bportuguese\b|\baudio pt\b|\baudio br\b/.test(haystack)) {
+        if (this.hasExplicitPortugueseAudio(stream)) {
             score += 90;
         }
 
-        if (/\bmulti\b|\bmulti audio\b|\blat\b/.test(haystack)) {
-            score += 20;
+        if (/\blat\b/.test(haystack)) {
+            score += 15;
         }
 
-        if (/\beng\b|\benglish\b|\boriginal\b/.test(haystack) && !/\bdublado\b|\bpt-br\b|\bdual audio\b/.test(haystack)) {
-            score -= 15;
+        if (/\beng\b|\benglish\b|\boriginal\b|\bjapanese\b|\bjap\b/.test(haystack) && !this.hasExplicitPortugueseAudio(stream)) {
+            score -= 20;
         }
 
         return score;
@@ -293,11 +346,9 @@ export class AddonService {
         const haystack = this.getStreamText(stream);
         let score = 0;
 
-        if (/\blegenda\b|\blegendado\b|\bsub\b|\bsubtitle\b|\bsubs\b/.test(haystack)) {
-            score += 10;
-        }
-
-        if (/\bpt-br\b|\bptbr\b|\bportugues\b|\bportuguese\b|\blegenda pt\b/.test(haystack)) {
+        if (/\blegenda pt\b|\blegenda pt-br\b|\bsub pt\b|\bsub pt-br\b|\bsubtitle pt\b|\bsubtitle pt-br\b|\bsubs pt\b|\bsubs pt-br\b/.test(haystack)) {
+            score += 60;
+        } else if (/\bpt-br\b|\bptbr\b|\bportugues\b|\bportuguese\b/.test(haystack) && /\blegenda\b|\blegendado\b|\bsub\b|\bsubtitle\b|\bsubs\b/.test(haystack)) {
             score += 40;
         }
 
@@ -320,7 +371,7 @@ export class AddonService {
     }
 
     static async getStreamsFromAllAddons(type: string, id: string, context: StreamContext = {}) {
-        const cacheKey = `${type}:${id}:${this.normalizeText(context.title)}`;
+        const cacheKey = `${type}:${id}:${this.normalizeText(context.title)}:${context.preferPortugueseAudio ? 'ptaudio' : 'audio-any'}:${context.acceptPortugueseSubtitles === false ? 'subs-off' : 'subs-on'}:${context.userId || 'anon'}`;
         const cached = this.streamCache.get(cacheKey);
         if (cached && cached.expiresAt > Date.now()) {
             return cached.streams;
@@ -372,7 +423,7 @@ export class AddonService {
             }
         }));
 
-        const ranked = this.rankStreams(type, allStreams, context);
+        const ranked = await this.rankStreams(type, allStreams, context);
         this.streamCache.set(cacheKey, {
             expiresAt: Date.now() + this.STREAM_CACHE_TTL_MS,
             streams: ranked,
@@ -388,9 +439,35 @@ export class AddonService {
         return true;
     }
 
-    private static rankStreams(type: string, streams: any[], context: StreamContext = {}) {
+    private static async rankStreams(type: string, streams: any[], context: StreamContext = {}) {
         const seen = new Set<string>();
-        const preferPortuguese = this.hasPortugueseHint(context.title);
+        const preferPortuguese = context.preferPortugueseAudio !== false && this.hasPortugueseHint(context.title);
+        const [userProfile, addonHeuristics] = await Promise.all([
+            context.userId
+                ? (prisma as any).userProfile.findUnique({ where: { userId: context.userId } }).catch(() => null)
+                : Promise.resolve(null),
+            prisma.systemStats.findMany({
+                where: {
+                    key: {
+                        in: Array.from(new Set(
+                            streams
+                                .map((stream) => `arconte:heuristic:addon:${type}:${this.normalizeText(stream.addonName || '')}`)
+                                .filter((key) => !key.endsWith(':'))
+                        )),
+                    },
+                },
+            }).catch(() => []),
+        ]);
+        const tasteProfile = this.parseStoredTasteProfile(userProfile?.preferredGenres);
+        const heuristicMap = new Map<string, any>(
+            addonHeuristics.map((row: any) => {
+                try {
+                    return [row.key, row.valueString ? JSON.parse(row.valueString) : null];
+                } catch {
+                    return [row.key, null];
+                }
+            })
+        );
 
         return streams
             .filter((stream) => {
@@ -408,9 +485,53 @@ export class AddonService {
                 const bPortugueseAudio = this.getPortugueseAudioScore(b);
                 if (aPortugueseAudio !== bPortugueseAudio) return bPortugueseAudio - aPortugueseAudio;
 
-                const aPortugueseSubtitle = this.getPortugueseSubtitleScore(a);
-                const bPortugueseSubtitle = this.getPortugueseSubtitleScore(b);
+                const aPortugueseSubtitle = context.acceptPortugueseSubtitles === false ? 0 : this.getPortugueseSubtitleScore(a);
+                const bPortugueseSubtitle = context.acceptPortugueseSubtitles === false ? 0 : this.getPortugueseSubtitleScore(b);
                 if (aPortugueseSubtitle !== bPortugueseSubtitle) return bPortugueseSubtitle - aPortugueseSubtitle;
+
+                if (type === 'series') {
+                    const aSpecificity = this.getEpisodeSpecificityScore(a, context);
+                    const bSpecificity = this.getEpisodeSpecificityScore(b, context);
+                    if (aSpecificity !== bSpecificity) return bSpecificity - aSpecificity;
+                }
+
+                const aAvailability = this.extractAvailabilityScore(a);
+                const bAvailability = this.extractAvailabilityScore(b);
+                if (Math.abs(aAvailability - bAvailability) >= 25) return bAvailability - aAvailability;
+
+                const getPersonalizedBoost = (stream: any, addonName: string, portugueseAudio: number, portugueseSubtitle: number, availability: number) => {
+                    const addonKey = `arconte:heuristic:addon:${type}:${this.normalizeText(addonName)}`;
+                    const heuristic = heuristicMap.get(addonKey);
+                    const wins = Number(heuristic?.wins || 0);
+                    const ptBrWins = Number(heuristic?.ptBrWins || 0);
+                    const avgAvailability = wins > 0 ? Number(heuristic?.totalAvailability || 0) / wins : 0;
+                    const preferredQuality = String(tasteProfile.preferredQuality || '1080p').toLowerCase();
+                    const titleText = `${stream?.title || ''} ${stream?.name || ''}`;
+                    const qualityBoost = preferredQuality.includes('2160')
+                        ? (/2160|4k/i.test(titleText) ? 12 : 0)
+                        : preferredQuality.includes('720')
+                            ? (/720/i.test(titleText) ? 8 : 0)
+                            : (/1080/i.test(titleText) ? 10 : 0);
+                    const portugueseAffinity = Number(tasteProfile.languageSignals?.['audio-pt-br'] || 0)
+                        + Number(tasteProfile.languageSignals?.dubbed || 0);
+                    const subtitleAffinity = Number(tasteProfile.languageSignals?.['subtitle-pt-br'] || 0);
+                    const addonFamilyBoost = addonName.includes('brazuca') && portugueseAffinity > 1 ? 35
+                        : addonName.includes('torrentio') && wins > 0 ? 16
+                        : 0;
+
+                    return addonFamilyBoost
+                        + qualityBoost
+                        + Math.min(40, ptBrWins * 8)
+                        + Math.min(25, wins * 3)
+                        + Math.min(20, Math.round(avgAvailability / 6))
+                        + (portugueseAudio > 0 ? Math.min(28, portugueseAffinity * 3) : 0)
+                        + (portugueseSubtitle > 0 ? Math.min(14, subtitleAffinity * 2) : 0)
+                        + (availability > 0 && avgAvailability > 20 ? 6 : 0);
+                };
+
+                const aPersonalized = getPersonalizedBoost(a, aName, aPortugueseAudio, aPortugueseSubtitle, aAvailability);
+                const bPersonalized = getPersonalizedBoost(b, bName, bPortugueseAudio, bPortugueseSubtitle, bAvailability);
+                if (aPersonalized !== bPersonalized) return bPersonalized - aPersonalized;
 
                 const aPriority = (this.ADDON_PRIORITY[aName] || 0)
                     + (preferPortuguese && aName.includes('brazuca') ? 35 : 0)
@@ -424,12 +545,6 @@ export class AddonService {
                 const aP2P = a.infoHash || String(a.url || '').startsWith('magnet:') ? 1 : 0;
                 const bP2P = b.infoHash || String(b.url || '').startsWith('magnet:') ? 1 : 0;
                 if (type === 'series' && aP2P !== bP2P) return bP2P - aP2P;
-
-                if (type === 'series') {
-                    const aSpecificity = this.getEpisodeSpecificityScore(a, context);
-                    const bSpecificity = this.getEpisodeSpecificityScore(b, context);
-                    if (aSpecificity !== bSpecificity) return bSpecificity - aSpecificity;
-                }
 
                 const aSwarm = this.extractSwarmScore(a);
                 const bSwarm = this.extractSwarmScore(b);
