@@ -1,0 +1,74 @@
+{
+    "name": "StreamForge Pro",
+    "short_name": "StreamForge",
+    "description": "Plataforma Premium de Streaming Híbrido P2P/HLS com IA",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#0a0a0f",
+    "theme_color": "#00d9ff",
+    "orientation": "any",
+    "scope": "/",
+    "lang": "pt-BR",
+    "categories": [
+        "entertainment",
+        "video",
+        "streaming"
+    ],
+    "icons": [
+        {
+            "src": "/vite.svg",
+            "sizes": "48x48",
+            "type": "image/svg+xml",
+            "purpose": "any"
+        },
+        {
+            "src": "/vite.svg",
+            "sizes": "72x72",
+            "type": "image/svg+xml",
+            "purpose": "any"
+        },
+        {
+            "src": "/vite.svg",
+            "sizes": "96x96",
+            "type": "image/svg+xml",
+            "purpose": "any"
+        },
+        {
+            "src": "/vite.svg",
+            "sizes": "144x144",
+            "type": "image/svg+xml",
+            "purpose": "any"
+        },
+        {
+            "src": "/vite.svg",
+            "sizes": "192x192",
+            "type": "image/svg+xml",
+            "purpose": "any maskable"
+        },
+        {
+            "src": "/vite.svg",
+            "sizes": "512x512",
+            "type": "image/svg+xml",
+            "purpose": "any maskable"
+        }
+    ],
+    "screenshots": [],
+    "shortcuts": [
+        {
+            "name": "Buscar Torrents",
+            "short_name": "Torrents",
+            "description": "Busca em 10+ fontes de torrents",
+            "url": "/torrents",
+            "icons": []
+        },
+        {
+            "name": "Minha Lista",
+            "short_name": "Lista",
+            "description": "Ver minha lista de vídeos",
+            "url": "/my-list",
+            "icons": []
+        }
+    ],
+    "related_applications": [],
+    "prefer_related_applications": false
+}

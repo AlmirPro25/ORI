@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NEXUS | Deep Search</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nexus: {
+                            bg: '#050505',
+                            card: '#111111',
+                            accent: '#00ff41',
+                            dim: '#008F11',
+                            text: '#e0e0e0',
+                            border: '#333333'
+                        }
+                    },
+                    fontFamily: {
+                        mono: ['Courier New', 'monospace'],
+                        sans: ['Inter', 'system-ui', 'sans-serif']
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #050505;
+            color: #e0e0e0;
+        }
+
+        .scan-line {
+            width: 100%;
+            height: 2px;
+            background: #00ff41;
+            position: absolute;
+            animation: scan 2s linear infinite;
+            opacity: 0.5;
+        }
+
+        @keyframes scan {
+            0% {
+                top: 0%;
+                opacity: 0;
+            }
+
+            50% {
+                opacity: 1;
+            }
+
+            100% {
+                top: 100%;
+                opacity: 0;
+            }
+        }
+    </style>
+</head>
+
+<body class="font-sans min-h-screen flex flex-col">
+    <header class="border-b border-nexus-border p-4 sticky top-0 z-50 bg-nexus-bg bg-opacity-95">
+        <div class="max-w-7xl mx-auto flex justify-between items-center">
+            <div class="flex items-center gap-2">
+                <div class="w-3 h-3 bg-nexus-accent rounded-full animate-pulse"></div>
+                <h1 class="text-xl font-bold tracking-widest text-nexus-accent font-mono">NEXUS_v1.0</h1>
+            </div>
+            <div id="status" class="text-xs font-mono text-gray-500 uppercase">Status: Idle</div>
+        </div>
+    </header>
+
+    <main class="flex-grow max-w-7xl mx-auto w-full p-4 md:p-8">
+        <div class="max-w-3xl mx-auto mb-12 mt-8">
+            <form id="searchForm" class="relative group">
+                <div
+                    class="absolute -inset-0.5 bg-gradient-to-r from-nexus-dim to-nexus-accent rounded-lg blur opacity-30 group-hover:opacity-75 transition duration-500">
+                </div>
+                <div class="relative flex items-center bg-nexus-card rounded-lg border border-nexus-border">
+                    <span class="pl-4 text-nexus-dim font-mono text-lg">></span>
+                    <input type="text" id="searchInput"
+                        class="w-full bg-transparent border-none text-white px-4 py-4 focus:ring-0 font-mono"
+                        placeholder="Parâmetros de busca...">
+                    <button type="submit"
+                        class="px-8 py-2 text-nexus-accent font-bold hover:bg-nexus-accent hover:text-black transition-all font-mono uppercase text-sm">Executar</button>
+                </div>
+            </form>
+        </div>
+
+        <div id="loader"
+            class="hidden relative max-w-2xl mx-auto h-32 border border-nexus-dim/30 bg-nexus-card/50 flex flex-col items-center justify-center rounded overflow-hidden">
+            <div class="scan-line"></div>
+            <p class="text-nexus-accent font-mono animate-pulse">INFILTRANDO NA REDE...</p>
+        </div>
+
+        <div id="resultsArea" class="hidden">
+            <div class="flex justify-between items-end mb-4 border-b border-gray-800 pb-2">
+                <h2 class="text-xl font-bold text-white uppercase italic">Resultados</h2>
+                <span id="count" class="text-xs font-mono text-nexus-accent"></span>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-left">
+                    <thead class="text-xs text-gray-500 font-mono uppercase border-b border-gray-800">
+                        <tr>
+                            <th class="py-3 px-4">Nome</th>
+                            <th class="py-3 px-4">Size</th>
+                            <th class="py-3 px-4 text-center">Seeds</th>
+                            <th class="py-3 px-4 text-right">Ação</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tbody" class="text-sm"></tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const form = document.getElementById('searchForm');
+        const loader = document.getElementById('loader');
+        const resultsArea = document.getElementById('resultsArea');
+        const status = document.getElementById('status');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const q = document.getElementById('searchInput').value;
+            if (!q) return;
+
+            status.innerText = "Status: Crawling...";
+            loader.classList.remove('hidden');
+            resultsArea.classList.add('hidden');
+
+            try {
+                const res = await fetch('/api/search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: q })
+                });
+                const data = await res.json();
+                loader.classList.add('hidden');
+
+                if (data.results && data.results.length > 0) {
+                    document.getElementById('tbody').innerHTML = data.results.map(i => `
+                        <tr class="border-b border-gray-900 hover:bg-white/5">
+                            <td class="py-3 px-4">${i.title}</td>
+                            <td class="py-3 px-4 font-mono text-gray-500">${i.size}</td>
+                            <td class="py-3 px-4 text-center text-nexus-accent">${i.seeds}</td>
+                            <td class="py-3 px-4 text-right">
+                                <button onclick="navigator.clipboard.writeText('${i.magnetLink}')" class="text-[10px] border border-nexus-dim px-2 py-1 text-nexus-accent hover:bg-nexus-accent hover:text-black transition-all uppercase">Magnet</button>
+                            </td>
+                        </tr>
+                    `).join('');
+                    document.getElementById('count').innerText = `${data.results.length} entradas [${data.source}]`;
+                    resultsArea.classList.remove('hidden');
+                    status.innerText = "Status: Idle";
+                } else {
+                    alert(data.error || "Nada encontrado.");
+                    status.innerText = "Status: Error";
+                }
+            } catch (e) {
+                alert("Falha no nexo.");
+                loader.classList.add('hidden');
+            }
+        });
+    </script>
+</body>
+
+</html>

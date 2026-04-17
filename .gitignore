@@ -1,0 +1,52 @@
+# Dependencies
+node_modules
+/backend/node_modules
+/frontend/node_modules
+
+# Build outputs
+dist
+build
+.next
+out
+
+# Database
+*.db
+*.db-journal
+/backend/prisma/*.db
+
+# Env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Orion Protocol Secrets (CRITICAL)
+orion-identity.json
+backend/orion-identity.json
+*.key
+
+# Media & Storage
+storage/
+uploads/
+downloads/
+/backend/storage
+/backend/uploads
+/backend/downloads
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs
+*.log
+
+# System files
+.DS_Store
+Thumbs.db
+
+# AI & Agent metadata
+.agent/
+.cortex/
+.brain/
+.gemini/

@@ -1,0 +1,18 @@
+{
+    "name": "streamforge-enterprise",
+    "version": "1.0.0",
+    "description": "Plataforma de Streaming Híbrido P2P/HLS Enterprise",
+    "scripts": {
+        "dev": "npm run dev:all",
+        "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install && cd ../nexus && npm install",
+        "dev:backend": "cd backend && npm run dev",
+        "dev:frontend": "cd frontend && npm run dev",
+        "dev:nexus": "cd nexus && npm start",
+        "dev:gateway": "cd backend && node torrent-gateway.mjs",
+        "dev:all": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\" \"npm run dev:nexus\" \"npm run dev:gateway\"",
+        "start:all": "npm run dev:all"
+    },
+    "devDependencies": {
+        "concurrently": "^8.2.2"
+    }
+}

@@ -1,0 +1,167 @@
+
+openapi: 3.0.3
+info:
+  title: StreamForge API
+  description: API Industrial para ingestão e streaming de vídeo via HLS.
+  version: 1.0.0
+servers:
+  - url: http://localhost:3000/api/v1
+    description: Development Server
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    VideoStatus:
+      type: string
+      enum: [WAITING, PROCESSING, READY, FAILED]
+      description: Estado atual do pipeline de processamento.
+    Video:
+      type: object
+      required: [id, title, status, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          $ref: '#/components/schemas/VideoStatus'
+        hlsPath:
+          type: string
+          nullable: true
+          description: Caminho relativo no bucket S3 para o manifesto m3u8. Null se não estiver READY.
+        thumbnailPath:
+          type: string
+          nullable: true
+        views:
+          type: integer
+          default: 0
+        createdAt:
+          type: string
+          format: date-time
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        details:
+          type: object
+paths:
+  /auth/register:
+    post:
+      summary: Registrar novo Engenheiro/Usuário
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, name]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+                name: { type: string }
+      responses:
+        201:
+          description: Usuário criado com sucesso.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  email: { type: string }
+
+  /auth/login:
+    post:
+      summary: Autenticar e obter Token JWT
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string }
+                password: { type: string }
+      responses:
+        200:
+          description: Autenticado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+
+  /videos/upload:
+    post:
+      summary: Ingestão de Vídeo Bruto
+      description: Faz upload de um arquivo de vídeo para processamento assíncrono.
+      tags: [Videos]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, title]
+              properties:
+                title: { type: string }
+                description: { type: string }
+                file:
+                  type: string
+                  format: binary
+                  description: Arquivo de vídeo (MP4, MKV, MOV). Max 2GB.
+      responses:
+        202:
+          description: Upload aceito. O processamento iniciou em background.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Video'
+        400:
+          description: Arquivo inválido ou formato não suportado.
+
+  /videos:
+    get:
+      summary: Listar catálogo de vídeos
+      tags: [Videos]
+      responses:
+        200:
+          description: Lista de vídeos (apenas READY por padrão).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Video'
+
+  /videos/{id}:
+    get:
+      summary: Obter metadados de um vídeo
+      tags: [Videos]
+      parameters:
+        - in: path
+          name: id
+          schema: { type: string }
+          required: true
+      responses:
+        200:
+          description: Detalhes do vídeo.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Video'
+        404:
+          description: Vídeo não encontrado.

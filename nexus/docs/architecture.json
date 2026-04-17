@@ -1,0 +1,39 @@
+{
+    "project_name": "Nexus Deep Search",
+    "version": "1.0.0",
+    "description": "Sistema autônomo de busca e extração de magnet links via automação headless.",
+    "architectural_style": "Monolito Funcional (Single-File Backend)",
+    "core_components": {
+        "frontend": {
+            "technology": "HTML5, TailwindCSS (CDN), Vanilla JS/Alpine.js",
+            "responsibility": "Interface de comando, visualização de dados e feedback de estado.",
+            "file": "index.html"
+        },
+        "backend": {
+            "technology": "Node.js, Express, Puppeteer, SQLite3",
+            "responsibility": "Orquestração de browser, evasão de bot-detection, persistência de dados e API REST.",
+            "file": "server.js"
+        },
+        "database": {
+            "technology": "SQLite (Embedded)",
+            "responsibility": "Cache de resultados e log de auditoria de buscas.",
+            "initialization": "Auto-init no boot do server.js"
+        }
+    },
+    "data_flow": {
+        "1": "Cliente envia termo de busca via POST /api/search.",
+        "2": "Servidor verifica cache SQLite (TTL 1 hora).",
+        "3": "Se cache miss: Servidor inicia instância Puppeteer (Headless Chrome).",
+        "4": "Puppeteer intercepta requisições (bloqueia img/css/font) para velocidade máxima.",
+        "5": "Navegação até fontes P2P alvo (ex: 1337x, NYAA, etc).",
+        "6": "Extração de DOM (Magnet, Título, Seeds, Size).",
+        "7": "Sanitização e Normalização de dados.",
+        "8": "Persistência em SQLite e retorno JSON ao cliente.",
+        "9": "Browser.close() executado em bloco 'finally' para evitar memory leaks."
+    },
+    "security_protocols": {
+        "input_validation": "Regex estrito para query params.",
+        "output_sanitization": "Escaping de HTML nas strings retornadas.",
+        "resource_guard": "Timeout forçado de 30s para evitar processos zumbis."
+    }
+}
